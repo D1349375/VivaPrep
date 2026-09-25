@@ -35,7 +35,7 @@ const state = {
   ],
   config: { duration: 15, mode: "voice", captions: true, timer: true },
   panel: "balanced", people: [...panels[0].people], seed: 260926,
-  q: 0, answers: [], schedule: [], elapsed: 0, muted: false,
+  q: 0, answers: [], draft: "", schedule: [], elapsed: 0, muted: false,
   confirmEnd: false, stream: null, deviceReady: false, toastTimer: null,
 };
 const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
@@ -142,7 +142,7 @@ function interviewPage() {
   <header class="interview-topline"><a class="interview-brand" href="#" data-action="home"><span class="brand-mark">V</span><span><strong>VivaPrep</strong><small>模擬面試</small></span></a><div class="interview-context"><span class="context-dot"></span><span>${p.school}・${p.dept}</span><i>·</i><span>${p.route}</span><b>示範情境</b></div><div class="interview-top-actions">${timer}<button class="exit-link" data-action="end">結束面試 <span>↗</span></button></div></header>
   <div class="room-caption-top"><span class="room-status"><i></i> 面試進行中</span><span class="room-phase">${q.topic}　·　${String(state.q + 1).padStart(2, "0")} / ${questions.length}</span></div>
   <section class="room-stage" data-count="${people.length}" aria-label="一個連續的面試室場景">${people.map((x, i) => actor(x, i, people.length, event)).join("")}<div class="speaker-cue"><span class="cue-pulse"></span><span><small>目前發問</small><strong>${speaker.name}・${speaker.role}</strong></span><span class="cue-chevron">›</span></div></section>
-  <div class="interview-bottom">${caption}<form class="answer-composer" data-form="answer"><div class="composer-context"><span class="composer-wave">${state.config.mode === "voice" ? "♩" : "⌁"}</span><span>${state.config.mode === "voice" ? "語音練習示範" : "文字練習"}<small>前端 mock・回答只留在本機頁面</small></span></div><textarea name="answer" rows="2" placeholder="${state.config.mode === "voice" ? "目前未連接語音辨識，可先輸入模擬回答…" : "輸入你的回答，再送出繼續…"}" aria-label="輸入模擬回答"></textarea><button class="send-answer" type="submit" aria-label="送出回答並繼續">↑</button></form></div>
+  <div class="interview-bottom">${caption}<form class="answer-composer" data-form="answer"><div class="composer-context"><span class="composer-wave">${state.config.mode === "voice" ? "♩" : "⌁"}</span><span>${state.config.mode === "voice" ? "語音練習示範" : "文字練習"}<small>前端 mock・回答只留在本機頁面</small></span></div><textarea name="answer" rows="2" placeholder="${state.config.mode === "voice" ? "目前未連接語音辨識，可先輸入模擬回答…" : "輸入你的回答，再送出繼續…"}" aria-label="輸入模擬回答">${esc(state.draft)}</textarea><button class="send-answer" type="submit" aria-label="送出回答並繼續">↑</button></form></div>
   <footer class="interview-dock"><div class="dock-group"><button class="dock-control ${state.muted ? "is-muted" : ""}" data-action="mic"><span>${state.muted ? "×" : "♩"}</span><small>${state.muted ? "麥克風關閉" : "麥克風示範"}</small></button><button class="dock-control is-camera" data-action="camera"><span>▣</span><small>鏡頭預覽已隱藏</small></button><button class="dock-control ${state.config.captions ? "is-on" : ""}" data-action="captions"><span>CC</span><small>字幕 ${state.config.captions ? "開啟" : "關閉"}</small></button></div><div class="dock-center"><span class="question-progress">${progress}</span><span>第 ${state.q + 1} 題</span></div><div class="dock-right"><span class="seed-badge">SEED ${esc(state.seed)}</span><button class="button button-glass" data-action="next">${state.q === questions.length - 1 ? "結束並看復盤" : "下一題"} <span>→</span></button></div></footer>${modal}</main>`;
 }
 function feedback(q, answer, i) {
@@ -172,12 +172,13 @@ function render() {
   }
 }
 function startInterview() {
-  stopMedia(); state.page = "interview"; state.q = 0; state.answers = [];
+  stopMedia(); state.page = "interview"; state.q = 0; state.answers = []; state.draft = "";
   state.schedule = scheduleFor(state.seed); state.elapsed = 0; state.muted = false; state.confirmEnd = false; render();
 }
 function submitAnswer() {
   const input = app.querySelector('[data-form="answer"] textarea');
   state.answers[state.q] = input?.value.trim() || "";
+  state.draft = "";
   if (state.q === questions.length - 1) { state.page = "review"; state.confirmEnd = false; render(); return; }
   state.q++; render();
 }
@@ -244,6 +245,7 @@ app.addEventListener("change", (event) => {
 app.addEventListener("input", (event) => {
   const el = event.target;
   if (el.dataset.claim) { const claim = state.claims.find((c) => c.id === el.dataset.claim); if (claim) claim.text = el.value; }
+  else if (el.name === "answer") state.draft = el.value;
   else if (el.dataset.seed !== undefined) state.seed = Math.max(1, Number(el.value) || 1);
 });
 app.addEventListener("submit", (event) => { if (event.target.matches('[data-form="answer"]')) { event.preventDefault(); submitAnswer(); } });
