@@ -11,6 +11,8 @@ const types = {
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".png": "image/png",
+  ".glb": "model/gltf-binary",
+  ".gltf": "model/gltf+json",
   ".svg": "image/svg+xml",
 };
 
@@ -21,6 +23,8 @@ createServer(async (request, response) => {
       ? "index.html"
       : pathname === "/vendor/three.module.js" || pathname === "/vendor/three.core.js"
         ? "node_modules/three/build" + pathname.replace("/vendor", "")
+      : pathname.startsWith("/vendor/addons/")
+        ? "node_modules/three/examples/jsm" + pathname.slice("/vendor/addons".length)
       : pathname.startsWith("/assets/")
         ? "public" + pathname
         : pathname.replace(/^[/\\]+/, "");

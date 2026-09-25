@@ -1,4 +1,5 @@
 import * as THREE from "/vendor/three.module.js";
+import { GLTFLoader } from "/vendor/addons/loaders/GLTFLoader.js";
 
 const COLORS = {
   wall: 0xe9e1d5,
@@ -186,7 +187,7 @@ function addHead(parent, id, palette) {
     block(head, brow, [x, 0.142, 0.25], [0.13, 0.024, 0.026]).rotation.z = x > 0 ? 0.08 : -0.08;
   }
   orb(head, skin, [0, -0.005, 0.285], [0.052, 0.11, 0.066], "nose");
-  block(head, standard(0x985f57, 0.65), [0, -0.185, 0.262], [0.112, 0.018, 0.024], "mouth");
+  const mouth = block(head, standard(0x985f57, 0.65), [0, -0.185, 0.262], [0.112, 0.018, 0.024], "mouth");
   // Hair cap plus temples create a readable silhouette without a flat portrait texture.
   orb(head, hair, [0, 0.20, -0.024], [0.325, 0.235, 0.298], "hair-cap");
   if (id === "portfolio") {
@@ -199,13 +200,13 @@ function addHead(parent, id, palette) {
     orb(head, hair, [0.12, 0.21, 0.17], [0.22, 0.115, 0.13], "parted-fringe").rotation.z = 0.15;
   }
   if (id !== "portfolio") makeGlasses(head, id === "technical" ? 0x313a40 : 0x44423f);
-  return head;
+  return { head, mouth };
 }
 
 function makeArm(actorRoot, side, palette, id) {
   const suit = standard(palette.suit), sleeve = standard(palette.suit), shirt = standard(palette.shirt), skin = standard(palette.skin);
   const shoulder = new THREE.Group();
-  shoulder.position.set(side * 0.36, 2.00, 0.0);
+  shoulder.position.set(side * 0.36, 0.92, 0.0);
   actorRoot.add(shoulder);
   orb(shoulder, suit, [side * 0.035, -0.055, 0], [0.21, 0.23, 0.22], "shoulder");
   link(shoulder, sleeve, [0, -0.05, 0], [side * 0.055, -0.37, 0.06], 0.105);
@@ -232,23 +233,29 @@ function makeInterviewer(scene, id) {
   const root = new THREE.Group();
   root.name = `${id}-interviewer-object`;
   scene.add(root);
+  // Pivot the upper body at the waist so a follow-up can visibly lean toward the candidate.
+  const upperBody = new THREE.Group();
+  upperBody.name = `${id}-upper-body-rig`;
+  upperBody.position.y = 1.08;
+  root.add(upperBody);
   const suit = standard(palette.suit), shirt = standard(palette.shirt), tie = standard(palette.tie), skin = standard(palette.skin), dark = standard(0x262b2e);
   // Seated jacket and shoulders; the shared table apron hides the waist consistently.
-  const torso = mesh(root, new THREE.CylinderGeometry(0.30, 0.39, 0.92, 12, 1), suit, [0, 1.68, -0.04], [1, 1, 0.62], "jacket-torso");
+  const torso = mesh(upperBody, new THREE.CylinderGeometry(0.30, 0.39, 0.92, 12, 1), suit, [0, 0.60, -0.04], [1, 1, 0.62], "jacket-torso");
   torso.rotation.z = Math.PI;
-  orb(root, suit, [-0.32, 2.00, -0.015], [0.22, 0.22, 0.23], "left-shoulder");
-  orb(root, suit, [0.32, 2.00, -0.015], [0.22, 0.22, 0.23], "right-shoulder");
+  orb(upperBody, suit, [-0.32, 0.92, -0.015], [0.22, 0.22, 0.23], "left-shoulder");
+  orb(upperBody, suit, [0.32, 0.92, -0.015], [0.22, 0.22, 0.23], "right-shoulder");
   // Shirt bib and two lapels on the camera-facing side.
-  block(root, shirt, [0, 1.82, 0.204], [0.28, 0.61, 0.045], "shirt-front");
+  block(upperBody, shirt, [0, 0.74, 0.204], [0.28, 0.61, 0.045], "shirt-front");
   const lapelGeo = new THREE.BufferGeometry();
-  lapelGeo.setAttribute("position", new THREE.Float32BufferAttribute([-0.31,2.09,0.23, -0.025,2.00,0.244, -0.12,1.65,0.25, 0.31,2.09,0.23, 0.025,2.00,0.244, 0.12,1.65,0.25], 3));
+  lapelGeo.setAttribute("position", new THREE.Float32BufferAttribute([-0.31,1.01,0.23, -0.025,0.92,0.244, -0.12,0.57,0.25, 0.31,1.01,0.23, 0.025,0.92,0.244, 0.12,0.57,0.25], 3));
   lapelGeo.setIndex([0,1,2,3,5,4]); lapelGeo.computeVertexNormals();
-  mesh(root, lapelGeo, standard(id === "portfolio" ? 0x9a8b79 : id === "technical" ? 0x586372 : 0x46566b), [0,0,0], [1,1,1], "jacket-lapels");
-  block(root, tie, [0, 1.80, 0.246], [0.095, 0.37, 0.04], "tie");
-  const knot = mesh(root, new THREE.CylinderGeometry(0.055, 0.07, 0.09, 5), tie, [0, 2.005, 0.252], [1,1,0.6], "tie-knot"); knot.rotation.z = Math.PI;
-  link(root, skin, [0, 2.14, 0.0], [0, 2.33, 0.02], 0.11, 16);
-  const head = addHead(root, id, palette);
-  const arms = { left: makeArm(root, -1, palette, id), right: makeArm(root, 1, palette, id) };
+  mesh(upperBody, lapelGeo, standard(id === "portfolio" ? 0x9a8b79 : id === "technical" ? 0x586372 : 0x46566b), [0,0,0], [1,1,1], "jacket-lapels");
+  block(upperBody, tie, [0, 0.72, 0.246], [0.095, 0.37, 0.04], "tie");
+  const knot = mesh(upperBody, new THREE.CylinderGeometry(0.055, 0.07, 0.09, 5), tie, [0, 0.925, 0.252], [1,1,0.6], "tie-knot"); knot.rotation.z = Math.PI;
+  link(upperBody, skin, [0, 1.06, 0.0], [0, 1.25, 0.02], 0.11, 16);
+  const { head, mouth } = addHead(upperBody, id, palette);
+  head.position.y -= 1.08;
+  const arms = { left: makeArm(upperBody, -1, palette, id), right: makeArm(upperBody, 1, palette, id) };
   // Legs and shoes are present as actual seated geometry; the tabletop naturally occludes them.
   const pants = standard(id === "portfolio" ? 0x62594f : 0x343b44);
   for (const side of [-1, 1]) {
@@ -258,9 +265,9 @@ function makeInterviewer(scene, id) {
   }
   if (id === "portfolio") {
     // A modest scarf detail marks the portfolio interviewer.
-    orb(root, standard(0xb58670), [0, 2.04, 0.24], [0.13, 0.09, 0.055], "scarf-detail");
+    orb(upperBody, standard(0xb58670), [0, 0.96, 0.24], [0.13, 0.09, 0.055], "scarf-detail");
   }
-  root.userData = { id, head, arms, torso, state: "listening", phase: id === "technical" ? 0 : id === "portfolio" ? 2.2 : 4.1 };
+  root.userData = { id, kind: "procedural", head, mouth, arms, torso, upperBody, state: "listening", stateStartedAt: 0, phase: id === "technical" ? 0 : id === "portfolio" ? 2.2 : 4.1 };
   return root;
 }
 
@@ -278,7 +285,7 @@ export class InterviewScene {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.className = "room-scene-canvas";
     this.renderer.domElement.setAttribute("aria-label", "3D 面試室與可替換面試官角色");
     this.renderer.domElement.setAttribute("role", "img");
@@ -305,6 +312,8 @@ export class InterviewScene {
     addRoom(this.scene);
     this.characters = new Map();
     this.chairs = new Map();
+    this.loader = new GLTFLoader();
+    this.avatarLoadStarted = false;
     for (const [idx, id] of ["technical", "portfolio", "logic"].entries()) {
       const x = [-2.9, 0, 2.9][idx];
       const chair = new THREE.Group();
@@ -336,7 +345,85 @@ export class InterviewScene {
     this.resize();
     this.updateActors(roster, speakerId, speakerState, otherStates);
     this.active = true;
+    this.loadRiggedAvatars();
     if (!this.frameId) this.frameId = requestAnimationFrame(this.animate);
+  }
+
+  async loadRiggedAvatars() {
+    if (this.avatarLoadStarted) return;
+    this.avatarLoadStarted = true;
+    const paths = {
+      technical: "/assets/avatars/technical.glb",
+      portfolio: "/assets/avatars/portfolio.glb",
+      logic: "/assets/avatars/logic.glb",
+    };
+    await Promise.all(Object.entries(paths).map(async ([id, path]) => {
+      try {
+        const exists = await fetch(path, { method: "HEAD" });
+        if (!exists.ok) return;
+        const gltf = await this.loader.loadAsync(path);
+        const modelBounds = new THREE.Box3().setFromObject(gltf.scene);
+        const height = Math.max(0.01, modelBounds.max.y - modelBounds.min.y);
+        const scale = 2.18 / height;
+        const avatar = new THREE.Group();
+        avatar.name = `${id}-rigged-interviewer-object`;
+        gltf.scene.scale.setScalar(scale);
+        gltf.scene.position.set(
+          -(modelBounds.min.x + modelBounds.max.x) * 0.5 * scale,
+          0.86 - modelBounds.min.y * scale,
+          -(modelBounds.min.z + modelBounds.max.z) * 0.5 * scale,
+        );
+        avatar.add(gltf.scene);
+        const fallback = this.characters.get(id);
+        if (!fallback) return;
+        avatar.position.copy(fallback.position);
+        avatar.visible = fallback.visible;
+        const mixer = new THREE.AnimationMixer(gltf.scene);
+        const actions = new Map(gltf.animations.map((clip) => [clip.name.toLowerCase(), mixer.clipAction(clip)]));
+        avatar.userData = {
+          id,
+          kind: "rigged",
+          state: fallback.userData.state,
+          stateStartedAt: fallback.userData.stateStartedAt,
+          phase: fallback.userData.phase,
+          mixer,
+          actions,
+          clips: gltf.animations.map((clip) => clip.name.toLowerCase()),
+          activeClip: "",
+        };
+        this.scene.add(avatar);
+        this.scene.remove(fallback);
+        this.characters.set(id, avatar);
+        if (this.actors.has(id)) this.actors.set(id, avatar);
+        this.playRiggedState(avatar, avatar.userData.state);
+        this.positionActors();
+      } catch {
+        // Keep the local procedural avatar when a model asset is missing or cannot load.
+      }
+    }));
+  }
+
+  playRiggedState(actor, state) {
+    if (actor.userData.kind !== "rigged") return;
+    const clipHints = {
+      speaking: [/speaking.*gesture/, /gesture.*speak/, /speak/, /talk/, /ask/],
+      follow_up: [/follow.?up/, /point/, /challenge/, /ask/, /speak/, /talk/],
+      reading_notes: [/read/, /note/, /write/],
+      considering: [/think/, /consider/, /listen/, /idle/],
+      listening: [/listen/, /idle/, /breath/],
+      idle: [/idle/, /breath/],
+    };
+    const wanted = clipHints[state] || clipHints.idle;
+    const fallback = state === "follow_up" ? clipHints.speaking : clipHints.listening;
+    const clipName = wanted.flatMap((pattern) => actor.userData.clips.filter((name) => pattern.test(name)))[0]
+      || fallback.flatMap((pattern) => actor.userData.clips.filter((name) => pattern.test(name)))[0];
+    if (!clipName || clipName === actor.userData.activeClip) return;
+    const next = actor.userData.actions.get(clipName);
+    if (!next) return;
+    const previous = actor.userData.actions.get(actor.userData.activeClip);
+    next.reset().fadeIn(0.22).play();
+    if (previous) previous.fadeOut(0.22);
+    actor.userData.activeClip = clipName;
   }
 
   setActive(value) {
@@ -379,7 +466,10 @@ export class InterviewScene {
       const chair = this.chairs.get(id);
       if (chair) chair.visible = idx >= 0;
       if (idx < 0) continue;
-      actor.userData.state = id === speakerId ? speakerState : (otherStates[id] || "listening");
+      const nextState = id === speakerId ? speakerState : (otherStates[id] || "listening");
+      if (actor.userData.state !== nextState) actor.userData.stateStartedAt = performance.now() / 1000;
+      actor.userData.state = nextState;
+      this.playRiggedState(actor, nextState);
       this.actors.set(id, actor);
     }
     this.positionActors();
@@ -391,28 +481,50 @@ export class InterviewScene {
     if (timestamp - this.lastFrame < 1000 / 30) { this.frameId = requestAnimationFrame(this.animate); return; }
     this.lastFrame = timestamp;
     const time = timestamp / 1000;
+    const delta = this.lastAnimationTime ? Math.min(0.08, (timestamp - this.lastAnimationTime) / 1000) : 1 / 60;
+    this.lastAnimationTime = timestamp;
     for (const actor of this.actors.values()) {
-      const { id, head, arms, torso, state, phase } = actor.userData;
+      const { id, state, phase } = actor.userData;
       const t = time + phase;
+      if (actor.userData.kind === "rigged") {
+        actor.userData.mixer.update(delta);
+        continue;
+      }
+      const { head, mouth, arms, torso, upperBody } = actor.userData;
       const speaking = state === "speaking" || state === "follow_up";
       const thinking = state === "considering" || state === "reading_notes";
-      const breath = Math.sin(t * 1.65) * 0.012;
+      const actionTime = Math.max(0, time - (actor.userData.stateStartedAt || time));
+      const cycle = (actionTime * (id === "portfolio" ? 0.40 : 0.52) + phase * 0.09) % 1;
+      const gesture = 0.28 + 0.72 * Math.pow(Math.max(0, Math.sin(cycle * Math.PI)), id === "logic" ? 1.15 : 1.45);
+      const nod = Math.pow(Math.max(0, Math.sin(t * (id === "portfolio" ? 1.15 : 0.83))), 8);
+      const writing = Math.sin(actionTime * 5.4 + phase);
+      const breath = Math.sin(t * 1.4) * 0.018;
       torso.scale.y = 1 + breath;
-      const targetHeadX = state === "reading_notes" ? 0.20 : speaking ? Math.sin(t * 2.25) * 0.055 : thinking ? 0.10 : Math.sin(t * 0.82) * 0.025;
-      const targetHeadZ = state === "considering" ? (id === "logic" ? -0.13 : 0.07) : Math.sin(t * 0.61) * 0.02;
-      head.rotation.x = THREE.MathUtils.damp(head.rotation.x, targetHeadX, 3.6, 1 / 60);
-      head.rotation.z = THREE.MathUtils.damp(head.rotation.z, targetHeadZ, 3.0, 1 / 60);
-      const gesture = speaking ? Math.sin(t * (id === "portfolio" ? 1.7 : 2.6)) : 0;
-      let raise = speaking ? (id === "logic" ? -0.36 : -0.23) + gesture * 0.14 : thinking && id === "logic" ? -0.2 : -0.045;
-      let open = id === "technical" ? -0.12 : id === "portfolio" ? -0.05 : 0.13;
-      if (state === "follow_up") { raise -= 0.18; open += 0.12; }
+      const targetHeadX = state === "reading_notes" ? 0.43 + Math.sin(t * 0.7) * 0.035 : speaking ? Math.sin(t * 1.5) * 0.09 : thinking ? 0.09 + nod * 0.16 : 0.015 + nod * 0.19;
+      const targetHeadZ = state === "considering" ? (id === "logic" ? -0.22 : 0.14) : state === "reading_notes" ? Math.sin(t * 0.48) * 0.07 : Math.sin(t * 0.45) * 0.025;
+      head.rotation.x = THREE.MathUtils.damp(head.rotation.x, targetHeadX, 5.5, delta);
+      head.rotation.z = THREE.MathUtils.damp(head.rotation.z, targetHeadZ, 4.2, delta);
+      const lean = state === "follow_up" ? 0.27 : state === "reading_notes" ? 0.11 : state === "considering" ? 0.025 : 0;
+      upperBody.rotation.x = THREE.MathUtils.damp(upperBody.rotation.x, lean + (state === "speaking" ? gesture * 0.075 : 0), 4.5, delta);
+      upperBody.rotation.z = THREE.MathUtils.damp(upperBody.rotation.z, state === "considering" ? (id === "logic" ? -0.055 : 0.04) : 0, 3.5, delta);
+      mouth.scale.y = 0.018 * (speaking ? 1 + 4.4 * (0.5 + 0.5 * Math.sin(t * 13.5)) : 1);
+      let raise = state === "follow_up"
+        ? (id === "portfolio" ? -0.48 - gesture * 0.25 : id === "technical" ? -0.55 - gesture * 0.26 : -0.62 - gesture * 0.30)
+        : speaking
+          ? (id === "technical" ? -0.18 - gesture * 0.56 : id === "portfolio" ? -0.16 - gesture * 0.46 : -0.22 - gesture * 0.65)
+          : state === "reading_notes" ? -0.30 - writing * 0.075 : state === "considering" && id === "logic" ? -0.26 : -0.045;
+      let open = id === "technical" ? -0.16 : id === "portfolio" ? 0.09 : 0.21;
       for (const side of [-1, 1]) {
-        const targetX = side === 1 ? raise : (speaking && id === "portfolio" ? -0.11 + gesture * 0.045 : 0.015);
-        const targetZ = side === 1 ? open : -open * 0.5;
+        const activeHand = side === 1 || (id === "portfolio" && (speaking || state === "follow_up"));
+        const supportHand = side === -1 && id === "portfolio" && (speaking || state === "follow_up");
+        const targetX = supportHand ? -0.06 - gesture * 0.26 : activeHand ? raise : 0.015;
+        const writingSweep = state === "reading_notes" && side === 1 ? writing * 0.11 : 0;
+        const targetZ = (activeHand ? open : -open * 0.35) + writingSweep + (speaking && id === "portfolio" && side === -1 ? -gesture * 0.09 : 0);
         const arm = arms[side === 1 ? "right" : "left"];
-        arm.shoulder.rotation.x = THREE.MathUtils.damp(arm.shoulder.rotation.x, targetX, 3.2, 1 / 60);
-        arm.shoulder.rotation.z = THREE.MathUtils.damp(arm.shoulder.rotation.z, targetZ, 3.2, 1 / 60);
-        arm.forearm.rotation.x = THREE.MathUtils.damp(arm.forearm.rotation.x, speaking ? -0.10 + gesture * 0.07 : 0, 3.0, 1 / 60);
+        arm.shoulder.rotation.x = THREE.MathUtils.damp(arm.shoulder.rotation.x, targetX, 5.0, delta);
+        arm.shoulder.rotation.z = THREE.MathUtils.damp(arm.shoulder.rotation.z, targetZ, 4.6, delta);
+        const bend = supportHand ? -0.06 - gesture * 0.10 : state === "follow_up" ? -0.35 : speaking ? -0.16 - gesture * 0.18 : state === "reading_notes" ? -0.09 + writing * 0.09 : 0;
+        arm.forearm.rotation.x = THREE.MathUtils.damp(arm.forearm.rotation.x, bend, 5.0, delta);
       }
     }
     this.renderer.render(this.scene, this.camera);

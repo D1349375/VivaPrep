@@ -139,6 +139,7 @@ function scheduleFor(seed) {
 function actor(person, index, total, event) {
   const seats = total === 1 ? [50] : total === 2 ? [34, 66] : [24, 50, 76];
   const action = person.id === event.speaker ? (state.followUp ? "follow_up" : "speaking") : person.id === event.reader ? "reading_notes" : event.beat === 0 ? "considering" : "listening";
+  if (person.id === event.speaker) return "";
   const label = action === "speaking" ? "正在提問" : action === "follow_up" ? "自然接話" : action === "reading_notes" ? person.cue : action === "considering" ? "思考中" : "聆聽中";
   return `<div class="scene-avatar-label actor-${person.id} ${action === "speaking" || action === "follow_up" ? "is-active-speaker" : ""}" data-person="${person.id}" data-state="${action}" style="--seat-x:${seats[index]}%"><span class="actor-state-dot"></span><span><strong>${person.name}</strong><small>${label}</small></span></div>`;
 }
