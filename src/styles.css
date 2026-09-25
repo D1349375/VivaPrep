@@ -575,6 +575,8 @@ a { color: inherit; text-decoration: none; }
   .seed-badge { display: none; }
   .button-glass { min-height: 34px; padding: 0 9px; gap: 5px; font-size: 8px; }
 }
+.app-boot-state { display: grid; min-height: 100vh; place-content: center; margin: 0; color: #48554d; background: #f5f2eb; font-size: 14px; text-align: center; }
+.app-boot-error { color: #965a45; }
 @media (max-width: 380px) {
   .topbar-left { gap: 8px; }
   .topbar-left .eyebrow { font-size: 8px; }
@@ -586,4 +588,64 @@ a { color: inherit; text-decoration: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+
+/* The live interview is rendered as one real-time 3D room, not a photo collage. */
+.interview-screen { background: #d9d0c2; }
+.room-stage { position: absolute !important; z-index: 0; inset: 0 !important; display: block !important; overflow: hidden; background: linear-gradient(180deg, #e8dfd2, #b7aa98); }
+.room-scene-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; opacity: 1; transition: opacity .45s ease; }
+.webgl-unavailable { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 8px; padding: 24px; color: #fff; background: linear-gradient(145deg, rgba(52,63,59,.86), rgba(104,89,72,.82)); text-align: center; font-size: 15px; }
+.webgl-unavailable span { color: rgba(255,255,255,.72); font-size: 10px; }
+.room-caption-top { z-index: 2; top: 83px; right: 24px; left: 24px; align-items: flex-start; flex-wrap: wrap; }
+.room-status, .room-phase, .silence-meter { border-color: rgba(255,255,255,.44); background: rgba(36,42,39,.49); box-shadow: 0 8px 25px rgba(30,35,31,.10); }
+.room-status { padding: 8px 11px; font-size: 9px; }
+.room-phase { padding: 8px 11px; font-size: 9px; }
+.silence-meter { display: grid; width: 174px; gap: 7px; padding: 8px 10px; border: 1px solid rgba(255,255,255,.22); border-radius: 7px; backdrop-filter: blur(10px); }
+.silence-meter > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: rgba(255,255,255,.76); font-size: 8px; }
+.silence-meter strong { color: #f5c09b; font-size: 9px; font-variant-numeric: tabular-nums; }
+.silence-track { display: block; height: 3px; overflow: hidden; border-radius: 3px; background: rgba(255,255,255,.25); }
+.silence-track i { display: block; width: 0; height: 100%; border-radius: inherit; background: #e7aa81; transition: width .22s linear; }
+.scene-avatar-labels { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.scene-avatar-label { position: absolute; top: 50%; left: var(--seat-x); display: flex; min-width: 120px; align-items: center; gap: 9px; padding: 8px 11px; transform: translateX(-50%); border: 1px solid rgba(255,255,255,.35); border-radius: 8px; color: #fff; background: rgba(34,40,37,.68); box-shadow: 0 8px 24px rgba(16,20,17,.17); backdrop-filter: blur(12px); transition: border-color .3s ease, background .3s ease, transform .3s ease; }
+.scene-avatar-label strong, .scene-avatar-label small { display: block; white-space: nowrap; }
+.scene-avatar-label strong { font-size: 10px; font-weight: 600; }
+.scene-avatar-label small { margin-top: 3px; color: rgba(255,255,255,.66); font-size: 7px; }
+.scene-avatar-label .actor-state-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #b0b7a2; }
+.scene-avatar-label.actor-technical .actor-state-dot { background: #d59474; }
+.scene-avatar-label.actor-portfolio .actor-state-dot { background: #a4b89b; }
+.scene-avatar-label.actor-logic .actor-state-dot { background: #9bb3c0; }
+.scene-avatar-label.is-active-speaker { transform: translateX(-50%) translateY(-3px); border-color: rgba(243,194,159,.75); background: rgba(45,46,41,.82); }
+.scene-avatar-label.is-active-speaker .actor-state-dot { box-shadow: 0 0 0 4px rgba(226,157,119,.20); }
+.speaker-cue { z-index: 2; top: 136px; right: clamp(18px, 4vw, 54px); bottom: auto; min-width: 190px; padding: 11px 13px; }
+.speaker-cue small { font-size: 8px; }
+.speaker-cue strong { font-size: 9px; }
+.speaker-cue.is-follow-up { border-color: rgba(240,178,136,.58); background: rgba(61,48,40,.72); }
+.interview-timer { min-width: 78px; padding: 0 10px; border-right: 1px solid rgba(255,255,255,.2); }
+.interview-timer span { font-size: 8px; }
+.interview-timer strong { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.interview-timer.is-urgent strong { color: #ffc09e; }
+.dock-hint { color: rgba(255,255,255,.59); font-size: 8px; }
+.setting-explainer { display: flex; grid-column: 1 / -1; align-items: center; gap: 10px; margin-top: 4px; padding: 10px 12px; border: 1px solid #e8dfd2; border-radius: 7px; background: #f7f3ec; }
+.pause-symbol { display: grid; width: 33px; height: 33px; flex: 0 0 auto; place-items: center; border-radius: 9px; color: var(--accent-dark); background: #efe0d4; font-size: 10px; font-weight: 700; }
+.setting-explainer strong, .setting-explainer small { display: block; }
+.setting-explainer strong { color: var(--ink); font-size: 9px; }
+.setting-explainer small { margin-top: 3px; color: var(--muted); font-size: 8px; }
+
+@media (max-width: 760px) {
+  .room-caption-top { top: 65px; right: 12px; left: 12px; gap: 6px; }
+  .room-status, .room-phase { padding: 6px 8px; font-size: 7px; }
+  .silence-meter { width: 132px; gap: 5px; padding: 6px 8px; }
+  .silence-meter > div { font-size: 6px; }
+  .silence-meter strong { font-size: 7px; }
+  .speaker-cue { top: 112px; right: 12px; min-width: 145px; padding: 8px; }
+  .speaker-cue small { font-size: 6px; }
+  .speaker-cue strong { font-size: 7px; }
+  .scene-avatar-label { top: 50%; min-width: 84px; gap: 6px; padding: 6px 7px; }
+  .scene-avatar-label strong { font-size: 8px; }
+  .scene-avatar-label small { font-size: 6px; }
+  .scene-avatar-label .actor-state-dot { width: 6px; height: 6px; }
+  .interview-timer { min-width: 60px; padding: 0 6px; }
+  .interview-timer span { font-size: 6px; }
+  .interview-timer strong { font-size: 12px; }
+  .dock-hint { display: none; }
 }

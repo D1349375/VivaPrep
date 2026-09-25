@@ -19,6 +19,8 @@ createServer(async (request, response) => {
     const pathname = decodeURIComponent(new URL(request.url, "http://localhost").pathname);
     const relative = pathname === "/"
       ? "index.html"
+      : pathname === "/vendor/three.module.js" || pathname === "/vendor/three.core.js"
+        ? "node_modules/three/build" + pathname.replace("/vendor", "")
       : pathname.startsWith("/assets/")
         ? "public" + pathname
         : pathname.replace(/^[/\\]+/, "");

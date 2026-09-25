@@ -1,5 +1,14 @@
+import { InterviewScene } from "./interview-scene.js";
+
 const app = document.getElementById("app");
 const toast = document.getElementById("toast");
+let sceneInitError = "";
+let interviewScene;
+try { interviewScene = new InterviewScene(); }
+catch (error) {
+  sceneInitError = error?.message || "此瀏覽器無法啟用 WebGL";
+  interviewScene = { mount(container) { if (container) container.insertAdjacentHTML("afterbegin", '<div class="webgl-unavailable">3D 場景無法啟動<span>請確認瀏覽器已啟用 WebGL</span></div>'); }, setActive() {} };
+}
 const profiles = [
   { id: "fcu-general", school: "逢甲大學", dept: "資訊工程學系", route: "個人申請・一般組", tag: "資訊工程", confidence: "示範情境", icon: "⌘" },
   { id: "fcu-apcs", school: "逢甲大學", dept: "資訊工程學系", route: "個人申請・APCS 組", tag: "APCS", confidence: "示範情境", icon: "⌘" },
@@ -33,9 +42,10 @@ const state = {
     { id: "c1", text: "我在校園借閱系統專題中負責資料處理與搜尋功能。" },
     { id: "c2", text: "我透過自學演算法，嘗試用動態規劃改善問題解法。" },
   ],
-  config: { duration: 15, mode: "voice", captions: true, timer: true },
+  config: { duration: 15, mode: "voice", captions: true },
   panel: "balanced", people: [...panels[0].people], seed: 260926,
-  q: 0, answers: [], draft: "", schedule: [], elapsed: 0, muted: false,
+  q: 0, answers: [], followUps: [], draft: "", schedule: [], elapsed: 0, remaining: 900,
+  muted: false, followUp: "", lastActivityAt: 0, audioReady: false,
   confirmEnd: false, stream: null, deviceReady: false, toastTimer: null,
 };
 const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
@@ -43,13 +53,15 @@ const profile = () => profiles.find((p) => p.id === state.profileId) || profiles
 const activePeople = () => state.people.map((id) => interviewers[id]).filter(Boolean);
 const currentQuestion = () => questions[Math.min(state.q, questions.length - 1)];
 const elapsedText = () => Math.floor(state.elapsed / 60).toString().padStart(2, "0") + ":" + (state.elapsed % 60).toString().padStart(2, "0");
+const remainingText = () => Math.floor(state.remaining / 60).toString().padStart(2, "0") + ":" + (state.remaining % 60).toString().padStart(2, "0");
 function notify(message) {
   toast.textContent = message; toast.classList.add("is-visible"); clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2500);
 }
 function stopMedia() {
+  stopAudioMonitor();
   if (state.stream) state.stream.getTracks().forEach((track) => track.stop());
-  state.stream = null; state.deviceReady = false;
+  state.stream = null; state.deviceReady = false; state.audioReady = false;
 }
 function go(page) {
   if (state.page === "device" && page !== "device") stopMedia();
@@ -105,8 +117,8 @@ function setupPage() {
   `<section class="panel-choice-section"><div class="section-heading compact-heading"><div><span class="eyebrow">INTERVIEW PANEL</span><h2>選一組考官</h2></div><span class="muted-count">三種面試組合</span></div><div class="panel-options">${panels.map((x) => `<button class="panel-option ${state.panel === x.id ? "is-selected" : ""}" data-action="panel" data-id="${x.id}"><span class="panel-option-top"><span class="panel-glyph">${x.icon}</span><span class="panel-count">${x.count}</span></span><strong>${x.title}</strong><small>${x.subtitle}</small><p>${x.desc}</p><span class="panel-option-check">${state.panel === x.id ? "已選擇 ✓" : "選擇陣容 →"}</span></button>`).join("")}</div></section>
   <section class="customize-panel"><div class="customize-heading"><div><span class="eyebrow">CHARACTER ROSTER</span><h3>調整考官角色</h3><p>保留 1–3 位考官；點擊角色卡即可替換陣容。</p></div><span class="roster-count"><strong>${state.people.length}</strong> / 3 位</span></div><div class="interviewer-picks">${Object.values(interviewers).map(personPick).join("")}</div><div class="roster-hint">目前陣容：${activePeople().map((x) => x.name).join("・") || "請至少選一位考官"}</div></section>
   <section class="settings-grid"><div class="setting-card"><div class="setting-label"><span class="setting-icon">◷</span><div><strong>練習時間</strong><small>用來安排節奏，不是評分</small></div></div><div class="segmented-control">${[10,15,20].map((n) => `<button class="${Number(state.config.duration) === n ? "is-active" : ""}" data-action="duration" data-value="${n}">${n}<small> 分鐘</small></button>`).join("")}</div></div>
-  <div class="setting-card"><div class="setting-label"><span class="setting-icon">◉</span><div><strong>回答方式</strong><small>對話流程使用本機 mock</small></div></div><div class="mode-options"><button class="${state.config.mode === "voice" ? "is-active" : ""}" data-action="mode" data-value="voice"><span>♩</span><strong>語音練習</strong><small>前端示範，文字輸入備援</small></button><button class="${state.config.mode === "text" ? "is-active" : ""}" data-action="mode" data-value="text"><span>⌁</span><strong>文字練習</strong><small>輸入回答後進入下一題</small></button></div></div>
-  <div class="setting-card setting-card-wide"><div class="setting-label"><span class="setting-icon">▤</span><div><strong>畫面偏好</strong><small>可在面試中隨時調整字幕</small></div></div><label class="toggle-row"><span><strong>顯示即時字幕</strong><small>預設開啟</small></span><input type="checkbox" data-config="captions" ${state.config.captions ? "checked" : ""} /><i></i></label><label class="toggle-row"><span><strong>顯示練習計時</strong><small>只在你選擇後顯示</small></span><input type="checkbox" data-config="timer" ${state.config.timer ? "checked" : ""} /><i></i></label></div></section>
+  <div class="setting-card"><div class="setting-label"><span class="setting-icon">◉</span><div><strong>回答方式</strong><small>計時與停頓偵測在本機執行</small></div></div><div class="mode-options"><button class="${state.config.mode === "voice" ? "is-active" : ""}" data-action="mode" data-value="voice"><span>♩</span><strong>語音情境</strong><small>麥克風偵測停頓・文字記錄回答</small></button><button class="${state.config.mode === "text" ? "is-active" : ""}" data-action="mode" data-value="text"><span>⌁</span><strong>文字情境</strong><small>依輸入停頓觸發考官接話</small></button></div></div>
+  <div class="setting-card setting-card-wide"><div class="setting-label"><span class="setting-icon">▤</span><div><strong>畫面與對話節奏</strong><small>全場倒數期間，停頓過久時考官會自然接話</small></div></div><label class="toggle-row"><span><strong>顯示即時字幕</strong><small>預設開啟</small></span><input type="checkbox" data-config="captions" ${state.config.captions ? "checked" : ""} /><i></i></label><div class="setting-explainer"><span class="pause-symbol">8s</span><span><strong>約 8 秒沒有回應</strong><small>原提問教授會自然接話或補問，不會自動跳到下一題。</small></span></div></div></section>
   <div class="seed-row"><span>動作排程種子</span><input type="number" min="1" max="999999" data-seed value="${state.seed}" /><small>相同種子可重播同一組角色動作。</small><button data-action="new-seed">換一組動作 ↻</button></div>
   <div class="form-footer"><button class="button button-quiet" data-action="step" data-page="resume">← 上一步</button><button class="button button-primary" data-action="step" data-page="device">下一步：設備檢查 <span>→</span></button></div>`;
 }
@@ -125,25 +137,26 @@ function scheduleFor(seed) {
   return questions.map((q, i) => { const speaker = pool.includes(q.role) ? q.role : pool[i % pool.length], others = pool.filter((id) => id !== speaker); return { speaker, reader: others.length && random() > .42 ? others[Math.floor(random() * others.length)] : "", beat: Math.floor(random() * 4) }; });
 }
 function actor(person, index, total, event) {
-  const seats = total === 1 ? [50] : total === 2 ? [33,67] : [19,50,81];
-  const action = person.id === event.speaker ? "speaking" : person.id === event.reader ? "reading_notes" : event.beat === 0 ? "considering" : "listening";
-  const label = action === "speaking" ? "正在提問" : action === "reading_notes" ? person.cue : action === "considering" ? "思考中" : "聆聽中";
-  const ring = action === "speaking" ? '<span class="speaker-ring"></span>' : "";
-  return `<div class="actor actor-${person.id} state-${action} ${action === "speaking" ? "is-active-speaker" : ""}" data-person="${person.id}" data-state="${action}" style="--seat-x:${seats[index]}%;--seat-index:${index}"><img class="actor-portrait" src="${person.image}" alt="${person.name}，${person.role}" /><div class="actor-nameplate ${person.color}"><span class="actor-state-dot"></span><strong>${person.name}</strong><small>${label}</small></div>${ring}</div>`;
+  const seats = total === 1 ? [50] : total === 2 ? [34, 66] : [24, 50, 76];
+  const action = person.id === event.speaker ? (state.followUp ? "follow_up" : "speaking") : person.id === event.reader ? "reading_notes" : event.beat === 0 ? "considering" : "listening";
+  const label = action === "speaking" ? "正在提問" : action === "follow_up" ? "自然接話" : action === "reading_notes" ? person.cue : action === "considering" ? "思考中" : "聆聽中";
+  return `<div class="scene-avatar-label actor-${person.id} ${action === "speaking" || action === "follow_up" ? "is-active-speaker" : ""}" data-person="${person.id}" data-state="${action}" style="--seat-x:${seats[index]}%"><span class="actor-state-dot"></span><span><strong>${person.name}</strong><small>${label}</small></span></div>`;
 }
 function interviewPage() {
   document.body.classList.add("is-interview");
   const p = profile(), q = currentQuestion(), event = state.schedule[state.q] || scheduleFor(state.seed)[0], speaker = interviewers[event.speaker] || interviewers.portfolio, people = activePeople();
-  const timer = state.config.timer ? '<span class="interview-timer"><span>練習計時</span><strong id="elapsed">' + elapsedText() + "</strong></span>" : "";
-  const caption = state.config.captions ? '<div class="caption-bubble"><span class="caption-speaker">' + speaker.name + "</span><p>" + q.text + "</p></div>" : "";
+  const speakerState = state.followUp ? "follow_up" : "speaking";
+  const timer = '<span class="interview-timer' + (state.remaining <= 60 ? " is-urgent" : "") + '"><span>全場倒數</span><strong id="remaining-time">' + remainingText() + "</strong></span>";
+  const captionText = state.followUp || q.text;
+  const caption = state.config.captions ? '<div class="caption-bubble" aria-live="polite"><span class="caption-speaker">' + speaker.name + (state.followUp ? "・追問" : "") + "</span><p>" + esc(captionText) + "</p></div>" : "";
   const progress = questions.map((_, i) => '<i class="' + (i === state.q ? "is-current" : i < state.q ? "is-past" : "") + '"></i>').join("");
   const modal = state.confirmEnd ? '<div class="modal-scrim"><div class="confirm-modal" role="dialog" aria-modal="true"><span class="modal-icon">↗</span><h2>要結束這次練習嗎？</h2><p>目前回答會整理到本機復盤頁，不會上傳。</p><div><button class="button button-quiet" data-action="continue">繼續練習</button><button class="button button-primary" data-action="confirm-end">結束並看復盤</button></div></div></div>' : "";
-  return `<main class="interview-screen"><div class="room-backdrop"></div><div class="room-wash"></div>
+  return `<main class="interview-screen">
   <header class="interview-topline"><a class="interview-brand" href="#" data-action="home"><span class="brand-mark">V</span><span><strong>VivaPrep</strong><small>模擬面試</small></span></a><div class="interview-context"><span class="context-dot"></span><span>${p.school}・${p.dept}</span><i>·</i><span>${p.route}</span><b>示範情境</b></div><div class="interview-top-actions">${timer}<button class="exit-link" data-action="end">結束面試 <span>↗</span></button></div></header>
-  <div class="room-caption-top"><span class="room-status"><i></i> 面試進行中</span><span class="room-phase">${q.topic}　·　${String(state.q + 1).padStart(2, "0")} / ${questions.length}</span></div>
-  <section class="room-stage" data-count="${people.length}" aria-label="一個連續的面試室場景">${people.map((x, i) => actor(x, i, people.length, event)).join("")}<div class="speaker-cue"><span class="cue-pulse"></span><span><small>目前發問</small><strong>${speaker.name}・${speaker.role}</strong></span><span class="cue-chevron">›</span></div></section>
-  <div class="interview-bottom">${caption}<form class="answer-composer" data-form="answer"><div class="composer-context"><span class="composer-wave">${state.config.mode === "voice" ? "♩" : "⌁"}</span><span>${state.config.mode === "voice" ? "語音練習示範" : "文字練習"}<small>前端 mock・回答只留在本機頁面</small></span></div><textarea name="answer" rows="2" placeholder="${state.config.mode === "voice" ? "目前未連接語音辨識，可先輸入模擬回答…" : "輸入你的回答，再送出繼續…"}" aria-label="輸入模擬回答">${esc(state.draft)}</textarea><button class="send-answer" type="submit" aria-label="送出回答並繼續">↑</button></form></div>
-  <footer class="interview-dock"><div class="dock-group"><button class="dock-control ${state.muted ? "is-muted" : ""}" data-action="mic"><span>${state.muted ? "×" : "♩"}</span><small>${state.muted ? "麥克風關閉" : "麥克風示範"}</small></button><button class="dock-control is-camera" data-action="camera"><span>▣</span><small>鏡頭預覽已隱藏</small></button><button class="dock-control ${state.config.captions ? "is-on" : ""}" data-action="captions"><span>CC</span><small>字幕 ${state.config.captions ? "開啟" : "關閉"}</small></button></div><div class="dock-center"><span class="question-progress">${progress}</span><span>第 ${state.q + 1} 題</span></div><div class="dock-right"><span class="seed-badge">SEED ${esc(state.seed)}</span><button class="button button-glass" data-action="next">${state.q === questions.length - 1 ? "結束並看復盤" : "下一題"} <span>→</span></button></div></footer>${modal}</main>`;
+  <div class="room-caption-top"><span class="room-status"><i></i> 面試進行中</span><span class="room-phase">${q.topic}　·　${String(state.q + 1).padStart(2, "0")} / ${questions.length}</span><div class="silence-meter"><div><span>停頓時考官會接話</span><strong id="silence-value">08 秒</strong></div><span class="silence-track"><i id="silence-progress"></i></span></div></div>
+  <section class="room-stage" data-count="${people.length}" aria-label="三維面試室；面試官是可替換的獨立 3D 角色"><div class="scene-avatar-labels">${people.map((x, i) => actor(x, i, people.length, event)).join("")}</div><div class="speaker-cue ${state.followUp ? "is-follow-up" : ""}"><span class="cue-pulse"></span><span><small>${state.followUp ? "教授自然接話" : "目前發問"}</small><strong>${speaker.name}・${speaker.role}</strong></span><span class="cue-chevron">›</span></div></section>
+  <div class="interview-bottom">${caption}<form class="answer-composer" data-form="answer"><div class="composer-context"><span class="composer-wave">${state.config.mode === "voice" ? "♩" : "⌁"}</span><span>${state.config.mode === "voice" ? "語音情境" : "文字練習"}<small>${state.audioReady && !state.muted ? "麥克風只偵測停頓" : "回答暫以文字輸入"}</small></span></div><textarea name="answer" rows="2" placeholder="${state.config.mode === "voice" ? "先用文字輸入回答；麥克風在本機偵測停頓…" : "輸入你的回答，考官會依節奏繼續…"}" aria-label="輸入模擬回答">${esc(state.draft)}</textarea><button class="send-answer" type="submit" aria-label="送出回答，讓面試繼續">↑</button></form></div>
+  <footer class="interview-dock"><div class="dock-group"><button class="dock-control ${state.muted ? "is-muted" : ""}" data-action="mic"><span>${state.muted ? "×" : "♩"}</span><small>${state.muted ? "開啟麥克風" : state.audioReady ? "麥克風已就緒" : "連接麥克風"}</small></button><button class="dock-control is-camera" data-action="camera"><span>▣</span><small>鏡頭預覽已隱藏</small></button><button class="dock-control ${state.config.captions ? "is-on" : ""}" data-action="captions"><span>CC</span><small>字幕 ${state.config.captions ? "開啟" : "關閉"}</small></button></div><div class="dock-center"><span class="question-progress">${progress}</span><span>${String(state.q + 1).padStart(2, "0")} / ${String(questions.length).padStart(2, "0")} 題</span></div><div class="dock-right"><span class="seed-badge">SEED ${esc(state.seed)}</span><span class="dock-hint">送出回答後，考官自然接續</span></div></footer>${modal}</main>`;
 }
 function feedback(q, answer, i) {
   if (!answer) return "尚未輸入作答。下一輪可以先用一句話回答，再補一個例子。";
@@ -152,35 +165,124 @@ function feedback(q, answer, i) {
 }
 function reviewPage() {
   const p = profile(), answered = state.answers.filter((a) => a && a.trim()).length;
-  const cards = questions.map((q, i) => `<article class="transcript-card"><div class="transcript-head"><span class="transcript-index">${String(i + 1).padStart(2, "0")}</span><div><span class="topic-chip">${q.topic}</span><h3>${q.text}</h3></div><span class="transcript-time">${interviewers[state.schedule[i]?.speaker || q.role]?.name || "考官"}</span></div><div class="answer-quote"><span>你的回答</span><p>${state.answers[i] ? esc(state.answers[i]) : "這題尚未輸入回答。"}</p></div><div class="feedback-note"><span>✳</span><p>${feedback(q, state.answers[i] || "", i)}</p></div><div class="evidence-link">練習提示・回應主題：<strong>${q.topic}</strong></div></article>`).join("");
+  const cards = questions.map((q, i) => `<article class="transcript-card"><div class="transcript-head"><span class="transcript-index">${String(i + 1).padStart(2, "0")}</span><div><span class="topic-chip">${q.topic}</span><h3>${q.text}</h3>${state.followUps[i] ? `<div class="review-follow-up"><span>教授接話</span><p>${esc(state.followUps[i])}</p></div>` : ""}</div><span class="transcript-time">${interviewers[state.schedule[i]?.speaker || q.role]?.name || "考官"}</span></div><div class="answer-quote"><span>你的回答</span><p>${state.answers[i] ? esc(state.answers[i]) : "這題尚未輸入回答。"}</p></div><div class="feedback-note"><span>✳</span><p>${feedback(q, state.answers[i] || "", i)}</p></div><div class="evidence-link">練習提示・回應主題：<strong>${q.topic}</strong></div></article>`).join("");
   const roster = activePeople().map((x) => '<div><img src="' + x.image + '" alt="" /><span><strong>' + x.name + "</strong><small>" + x.role + "</small></span></div>").join("");
-  return `<div class="review-hero"><div><span class="eyebrow accent">SESSION REVIEW / MOCK</span><h1>每一次回答，<br /><em>都能找到下一步。</em></h1><p>${p.school}・${p.dept}　／　${state.config.duration} 分鐘練習情境</p></div><div class="review-stamp"><span>V</span><small>練習完成</small><strong>${String(answered).padStart(2, "0")}<i> / ${questions.length}</i></strong><small>題有輸入回答</small></div></div>
+  return `<div class="review-hero"><div><span class="eyebrow accent">SESSION REVIEW / MOCK</span><h1>每一次回答，<br /><em>都能找到下一步。</em></h1><p>${p.school}・${p.dept}　／　練習 ${elapsedText()}${state.endReason === "time" ? "・時間到" : ""}</p></div><div class="review-stamp"><span>V</span><small>練習完成</small><strong>${String(answered).padStart(2, "0")}<i> / ${questions.length}</i></strong><small>題有輸入回答</small></div></div>
   <div class="review-disclaimer"><span>i</span><p><strong>這是前端示範復盤。</strong>內容依你輸入的文字與簡單本機規則整理；不代表官方評分，也不預測錄取結果。</p></div><div class="review-layout"><section class="review-main"><div class="section-heading compact-heading"><div><span class="eyebrow">QUESTION BY QUESTION</span><h2>逐題回看</h2></div><button class="text-link" data-action="export">下載文字紀錄 ↓</button></div><div class="transcript-list">${cards}</div></section>
   <aside class="review-aside"><div class="review-side-card next-practice-card"><span class="eyebrow">NEXT PRACTICE</span><h3>下一輪，先練這件事</h3><p>挑一個備審主張，用「情境 → 自己的行動 → 結果」各說一句，再試著回答教授的延伸追問。</p><div class="practice-quote">「這個成果裡，哪些是你親自完成的？」</div><button class="button button-primary full-button" data-action="practice">換一個 seed 再練一次 <span>↻</span></button></div><div class="review-side-card"><span class="eyebrow">PANEL USED</span><h3>這次的考官</h3><div class="review-roster">${roster}</div><button class="text-link" data-action="step" data-page="setup">調整陣容與設定 →</button></div><div class="review-safety"><span>◈</span><p>視線、停頓等訊號不會在此推斷個性或錄取機率。復盤只提供可回看、可練習的內容提示。</p></div></aside></div><div class="form-footer review-footer"><button class="button button-quiet" data-action="home">回到練習總覽</button><button class="button button-primary" data-action="practice">開始下一輪練習 <span>→</span></button></div>`;
 }
 
 let clock = null;
+let silenceClock = null;
+let audioContext = null;
+let audioAnalyser = null;
+let audioMonitorId = 0;
+function stopAudioMonitor() {
+  if (audioMonitorId) cancelAnimationFrame(audioMonitorId);
+  audioMonitorId = 0;
+  if (audioContext) { audioContext.close().catch(() => {}); audioContext = null; audioAnalyser = null; }
+}
+function startAudioMonitor() {
+  if (audioContext || !state.audioReady || state.muted || !state.stream?.getAudioTracks().length) return;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  try {
+    audioContext = new AudioContextClass();
+    audioAnalyser = audioContext.createAnalyser();
+    audioAnalyser.fftSize = 512;
+    audioContext.createMediaStreamSource(new MediaStream(state.stream.getAudioTracks())).connect(audioAnalyser);
+    audioContext.resume().catch(() => {});
+    const samples = new Uint8Array(audioAnalyser.fftSize);
+    const readLevel = () => {
+      if (!audioAnalyser || state.muted || state.page !== "interview") { audioMonitorId = 0; return; }
+      audioAnalyser.getByteTimeDomainData(samples);
+      let sum = 0;
+      for (const sample of samples) { const value = (sample - 128) / 128; sum += value * value; }
+      const rms = Math.sqrt(sum / samples.length);
+      if (rms > 0.035) state.lastActivityAt = Date.now();
+      audioMonitorId = requestAnimationFrame(readLevel);
+    };
+    audioMonitorId = requestAnimationFrame(readLevel);
+  } catch {
+    stopAudioMonitor();
+  }
+}
+function armSilencePrompt() {
+  state.lastActivityAt = Date.now();
+  state.followUp = "";
+}
+function triggerFollowUp() {
+  if (state.followUps[state.q]) return;
+  const event = state.schedule[state.q] || scheduleFor(state.seed)[0];
+  const prompts = {
+    technical: ["您可以先從自己實際負責的部分開始說。", "我想先了解你怎麼確認這個做法有效。"],
+    portfolio: ["可以先挑一段最能代表你的經歷開始說。", "沒關係，先從最有印象的一個例子談起。"],
+    logic: ["不用急著說完整，先講目前最有把握的判斷就好。", "你可以先說第一個想到的方向，再慢慢補上理由。"],
+  };
+  const variants = prompts[event.speaker] || prompts.portfolio;
+  state.followUp = variants[(Number(state.seed) + state.q) % variants.length];
+  state.followUps[state.q] = state.followUp;
+  state.lastActivityAt = Date.now();
+  render();
+}
+function finishInterview(reason = "manual") {
+  const input = app.querySelector('[data-form="answer"] textarea');
+  const current = input?.value.trim() || state.draft.trim();
+  if (current && !state.answers[state.q]) state.answers[state.q] = current;
+  state.endReason = reason;
+  state.page = "review"; state.confirmEnd = false;
+  stopMedia(); render();
+}
 function render() {
   if (state.page === "interview") {
     app.innerHTML = interviewPage();
-    if (state.config.timer && !clock) clock = setInterval(() => { state.elapsed++; const e = document.getElementById("elapsed"); if (e) e.textContent = elapsedText(); }, 1000);
+    const event = state.schedule[state.q] || scheduleFor(state.seed)[0];
+    const otherStates = Object.fromEntries(activePeople().map((person) => [person.id, person.id === event.speaker ? (state.followUp ? "follow_up" : "speaking") : person.id === event.reader ? "reading_notes" : event.beat === 0 ? "considering" : "listening"]));
+    interviewScene.mount(document.querySelector(".room-stage"), activePeople(), event.speaker, state.followUp ? "follow_up" : "speaking", otherStates);
+    startAudioMonitor();
+    if (!clock) clock = setInterval(() => {
+      state.elapsed++;
+      state.remaining = Math.max(0, Number(state.config.duration) * 60 - state.elapsed);
+      const e = document.getElementById("remaining-time"); if (e) e.textContent = remainingText();
+      const timer = document.querySelector(".interview-timer"); if (timer) timer.classList.toggle("is-urgent", state.remaining <= 60);
+      if (state.remaining <= 0) finishInterview("time");
+    }, 1000);
+    if (!silenceClock) silenceClock = setInterval(() => {
+      if (state.page !== "interview") return;
+      const silence = Math.max(0, 8 - (Date.now() - state.lastActivityAt) / 1000);
+      const value = document.getElementById("silence-value"); if (value) value.textContent = state.followUp ? "已接話" : `${Math.ceil(silence).toString().padStart(2, "0")} 秒`;
+      const progress = document.getElementById("silence-progress"); if (progress) progress.style.width = `${state.followUp ? 100 : ((8 - silence) / 8) * 100}%`;
+      if (silence === 0 && !state.followUps[state.q]) triggerFollowUp();
+    }, 250);
   } else {
     if (clock) clearInterval(clock); clock = null;
+    if (silenceClock) clearInterval(silenceClock); silenceClock = null;
+    interviewScene.setActive(false);
     const views = { home: homePage, profile: profilePage, resume: resumePage, setup: setupPage, device: devicePage, review: reviewPage };
     app.innerHTML = shell((views[state.page] || homePage)(), state.page === "home" ? "is-home" : "");
     const video = document.getElementById("device-video"); if (video && state.stream) video.srcObject = state.stream;
   }
 }
 function startInterview() {
-  stopMedia(); state.page = "interview"; state.q = 0; state.answers = []; state.draft = "";
-  state.schedule = scheduleFor(state.seed); state.elapsed = 0; state.muted = false; state.confirmEnd = false; render();
+  if (state.stream) {
+    state.stream.getVideoTracks().forEach((track) => track.stop());
+    const audioTracks = state.stream.getAudioTracks();
+    state.stream = audioTracks.length ? new MediaStream(audioTracks) : null;
+    state.audioReady = audioTracks.length > 0;
+    state.deviceReady = false;
+  }
+  state.page = "interview"; state.q = 0; state.answers = []; state.followUps = []; state.followUp = ""; state.draft = ""; state.endReason = "";
+  state.schedule = scheduleFor(state.seed); state.elapsed = 0; state.remaining = Number(state.config.duration) * 60; state.muted = false; state.confirmEnd = false;
+  armSilencePrompt(); render();
 }
 function submitAnswer() {
   const input = app.querySelector('[data-form="answer"] textarea');
-  state.answers[state.q] = input?.value.trim() || "";
+  const answer = input?.value.trim() || "";
+  if (!answer) { notify("先輸入一段回答，再讓教授繼續提問。"); input?.focus(); return; }
+  state.answers[state.q] = answer;
   state.draft = "";
-  if (state.q === questions.length - 1) { state.page = "review"; state.confirmEnd = false; render(); return; }
-  state.q++; render();
+  if (state.q === questions.length - 1) { finishInterview("complete"); return; }
+  state.q++; state.followUp = ""; armSilencePrompt(); render();
 }
 function setPanel(id) { const item = panels.find((p) => p.id === id); if (!item) return; state.panel = item.id; state.people = [...item.people]; render(); }
 function togglePerson(id) {
@@ -192,8 +294,28 @@ function togglePerson(id) {
 }
 async function checkDevices() {
   if (!navigator.mediaDevices?.getUserMedia) return notify("這個瀏覽器無法檢查設備，可直接使用示範模式。");
-  try { state.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); state.deviceReady = true; render(); notify("麥克風與鏡頭已在本機準備好。"); }
+  try { state.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); state.deviceReady = true; state.audioReady = state.stream.getAudioTracks().length > 0; render(); notify("麥克風與鏡頭已在本機準備好。"); }
   catch (error) { state.deviceReady = false; render(); notify(error?.name === "NotAllowedError" ? "你尚未允許設備權限；可以略過並使用示範模式。" : "目前無法連接設備，可以略過檢查。"); }
+}
+async function toggleMic() {
+  if (!state.audioReady) {
+    if (!navigator.mediaDevices?.getUserMedia) return notify("瀏覽器沒有可用的麥克風；停頓追問會依文字輸入節奏觸發。");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.stream = new MediaStream(stream.getAudioTracks());
+      state.audioReady = true; state.muted = false; state.lastActivityAt = Date.now();
+      startAudioMonitor(); render();
+    } catch (error) {
+      state.muted = true; render();
+      notify(error?.name === "NotAllowedError" ? "麥克風權限尚未開啟；仍可用文字輸入練習。" : "無法連接麥克風；仍可用文字輸入練習。");
+    }
+    return;
+  }
+  state.muted = !state.muted;
+  state.stream?.getAudioTracks().forEach((track) => { track.enabled = !state.muted; });
+  if (state.muted) stopAudioMonitor(); else startAudioMonitor();
+  state.lastActivityAt = Date.now();
+  render();
 }
 function newSeed() {
   const v = new Uint32Array(1); if (window.crypto?.getRandomValues) window.crypto.getRandomValues(v); else v[0] = Date.now() >>> 0;
@@ -201,7 +323,7 @@ function newSeed() {
 }
 function exportReview() {
   const lines = ["VivaPrep 面試復盤（前端示範）", profile().school + "・" + profile().dept, "",
-    ...questions.flatMap((q, i) => [String(i + 1) + ". " + q.topic, "考官：" + q.text, "回答：" + (state.answers[i] || "尚未輸入回答"), "練習提示：" + feedback(q, state.answers[i] || "", i), ""]),
+    ...questions.flatMap((q, i) => [String(i + 1) + ". " + q.topic, "考官提問：" + q.text, ...(state.followUps[i] ? ["考官接話：" + state.followUps[i]] : []), "回答：" + (state.answers[i] || "尚未輸入回答"), "練習提示：" + feedback(q, state.answers[i] || "", i), ""]),
     "本紀錄由本機 mock 規則產生，不代表官方評分或錄取結果。"];
   const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
   const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "VivaPrep-interview-review.txt"; link.click(); URL.revokeObjectURL(link.href);
@@ -222,13 +344,12 @@ app.addEventListener("click", async (event) => {
   else if (a === "remove-claim") { state.claims = state.claims.filter((c) => c.id !== id); render(); }
   else if (a === "sample") { state.claims = [{ id: "c" + Date.now(), text: "我在校園借閱系統專題中負責資料處理與搜尋功能。" }, { id: "c" + (Date.now() + 1), text: "我透過自學演算法，嘗試用動態規劃改善問題解法。" }]; render(); notify("已載入可自行修改的示範主張。"); }
   else if (a === "devices") await checkDevices();
-  else if (a === "mic") { state.muted = !state.muted; render(); }
+  else if (a === "mic") await toggleMic();
   else if (a === "camera") notify("正式面試不顯示自拍畫面；鏡頭只在設備檢查頁預覽。");
   else if (a === "captions") { state.config.captions = !state.config.captions; render(); }
-  else if (a === "next") submitAnswer();
   else if (a === "end") { state.confirmEnd = true; render(); }
   else if (a === "continue") { state.confirmEnd = false; render(); }
-  else if (a === "confirm-end") { state.page = "review"; state.confirmEnd = false; render(); }
+  else if (a === "confirm-end") finishInterview("manual");
   else if (a === "practice") { newSeed(); startInterview(); }
   else if (a === "export") exportReview();
   else if (a === "toast") notify("此校系資料功能會在接入來源後開放。");
@@ -245,7 +366,7 @@ app.addEventListener("change", (event) => {
 app.addEventListener("input", (event) => {
   const el = event.target;
   if (el.dataset.claim) { const claim = state.claims.find((c) => c.id === el.dataset.claim); if (claim) claim.text = el.value; }
-  else if (el.name === "answer") state.draft = el.value;
+  else if (el.name === "answer") { state.draft = el.value; state.lastActivityAt = Date.now(); }
   else if (el.dataset.seed !== undefined) state.seed = Math.max(1, Number(el.value) || 1);
 });
 app.addEventListener("submit", (event) => { if (event.target.matches('[data-form="answer"]')) { event.preventDefault(); submitAnswer(); } });
@@ -257,3 +378,4 @@ app.addEventListener("drop", (event) => {
   render(); notify("已選擇檔案；此原型只顯示檔名，不讀取或上傳內容。");
 });
 render();
+if (sceneInitError) notify("3D 場景未啟動：" + sceneInitError);

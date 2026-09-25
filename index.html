@@ -9,8 +9,28 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app"><div class="app-boot-state" role="status">VivaPrep 正在準備面試練習室…</div></div>
     <div id="toast" class="toast" aria-live="polite"></div>
+    <script>
+      window.addEventListener("error", (event) => {
+        const root = document.getElementById("app");
+        if (!root || root.querySelector(".app-shell, .interview-screen")) return;
+        root.innerHTML = "";
+        const message = document.createElement("p");
+        message.className = "app-boot-state app-boot-error";
+        message.textContent = "面試室啟動失敗：" + (event.message || "前端模組無法載入");
+        root.appendChild(message);
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        const root = document.getElementById("app");
+        if (!root || root.querySelector(".app-shell, .interview-screen")) return;
+        root.innerHTML = "";
+        const message = document.createElement("p");
+        message.className = "app-boot-state app-boot-error";
+        message.textContent = "面試室模組載入失敗：" + (event.reason?.message || "請確認本機套件已安裝");
+        root.appendChild(message);
+      });
+    </script>
     <script type="module" src="/src/app.js"></script>
   </body>
 </html>

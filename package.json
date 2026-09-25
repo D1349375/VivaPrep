@@ -6,5 +6,8 @@
   "scripts": {
     "dev": "node server.mjs",
     "start": "node server.mjs"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
   }
 }
