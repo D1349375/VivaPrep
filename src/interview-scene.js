@@ -314,6 +314,7 @@ export class InterviewScene {
     this.chairs = new Map();
     this.loader = new GLTFLoader();
     this.avatarLoadStarted = false;
+    this.avatarLoadStatus = new Map(["technical", "portfolio", "logic"].map((id) => [id, "pending"]));
     for (const [idx, id] of ["technical", "portfolio", "logic"].entries()) {
       const x = [-2.9, 0, 2.9][idx];
       const chair = new THREE.Group();
@@ -360,7 +361,12 @@ export class InterviewScene {
     await Promise.all(Object.entries(paths).map(async ([id, path]) => {
       try {
         const exists = await fetch(path, { method: "HEAD" });
-        if (!exists.ok) return;
+        if (!exists.ok) {
+          this.avatarLoadStatus.set(id, "failed");
+          const fallback = this.characters.get(id);
+          if (fallback) fallback.visible = this.actors.has(id);
+          return;
+        }
         const gltf = await this.loader.loadAsync(path);
         const modelBounds = new THREE.Box3().setFromObject(gltf.scene);
         const height = Math.max(0.01, modelBounds.max.y - modelBounds.min.y);
@@ -390,7 +396,7 @@ export class InterviewScene {
         const fallback = this.characters.get(id);
         if (!fallback) return;
         avatar.position.copy(fallback.position);
-        avatar.visible = fallback.visible;
+        avatar.visible = this.actors.has(id);
         const mixer = new THREE.AnimationMixer(gltf.scene);
         const actions = new Map(gltf.animations.map((clip) => [clip.name.toLowerCase(), mixer.clipAction(clip)]));
         avatar.userData = {
@@ -406,13 +412,17 @@ export class InterviewScene {
         };
         this.scene.add(avatar);
         this.scene.remove(fallback);
+        this.avatarLoadStatus.set(id, "loaded");
         this.characters.set(id, avatar);
         if (this.actors.has(id)) this.actors.set(id, avatar);
         this.playRiggedState(avatar, avatar.userData.state);
         this.positionActors();
       } catch (error) {
         console.warn(`Unable to load 3D interviewer asset: ${path}`, error);
-        // Keep the local procedural avatar when a model asset is missing or cannot load.
+        this.avatarLoadStatus.set(id, "failed");
+        const fallback = this.characters.get(id);
+        if (fallback) fallback.visible = this.actors.has(id);
+        // Show the local procedural avatar only when its Blender model cannot load.
       }
     }));
   }
@@ -476,7 +486,8 @@ export class InterviewScene {
     this.actors.clear();
     for (const [id, actor] of this.characters) {
       const idx = list.findIndex((person) => person.id === id);
-      actor.visible = idx >= 0;
+      const waitingForModel = actor.userData.kind === "procedural" && this.avatarLoadStatus.get(id) === "pending";
+      actor.visible = idx >= 0 && !waitingForModel;
       const chair = this.chairs.get(id);
       if (chair) chair.visible = idx >= 0;
       if (idx < 0) continue;
