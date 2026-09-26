@@ -138,15 +138,15 @@ function addRoom(scene) {
 
   // Long meeting table; the apron and front lip occlude seated lower bodies.
   const top = standard(0x79523a, 0.43), apron = standard(0x694833), leg = standard(0x583d2d);
-  block(scene, top, [0, 1.40, 0.40], [12.1, 0.18, 2.05], "meeting-table-top");
-  block(scene, apron, [0, 1.10, 1.29], [11.85, 0.43, 0.16], "table-apron");
+  block(scene, top, [0, 1.52, 0.40], [12.1, 0.18, 2.05], "meeting-table-top");
+  block(scene, apron, [0, 1.22, 1.29], [11.85, 0.43, 0.16], "table-apron");
   for (const x of [-5.3, 5.3]) block(scene, leg, [x, 0.61, 0.40], [0.24, 1.05, 1.55], "table-leg");
-  block(scene, lightWood, [0, 1.495, -0.15], [11.9, 0.025, 0.03]);
+  block(scene, lightWood, [0, 1.615, -0.15], [11.9, 0.025, 0.03]);
   // Small paper folders rest on top, in front of each seat.
   for (const x of [-3.0, 0, 3.0]) {
-    block(scene, standard(COLORS.paper), [x, 1.505, 0.05], [0.72, 0.025, 0.52], "interviewer-notes");
-    block(scene, standard(0xd0c8bb), [x, 1.522, 0.05], [0.48, 0.006, 0.012]);
-    block(scene, standard(0xb6a895), [x, 1.522, 0.12], [0.54, 0.006, 0.01]);
+    block(scene, standard(COLORS.paper), [x, 1.625, 0.05], [0.72, 0.025, 0.52], "interviewer-notes");
+    block(scene, standard(0xd0c8bb), [x, 1.642, 0.05], [0.48, 0.006, 0.012]);
+    block(scene, standard(0xb6a895), [x, 1.642, 0.12], [0.54, 0.006, 0.01]);
   }
 }
 
@@ -364,15 +364,28 @@ export class InterviewScene {
         const gltf = await this.loader.loadAsync(path);
         const modelBounds = new THREE.Box3().setFromObject(gltf.scene);
         const height = Math.max(0.01, modelBounds.max.y - modelBounds.min.y);
-        const scale = 2.18 / height;
+        // These are full-body rigged characters authored at the same scale, with
+        // the hips aligned to the independent chair seat behind the table.
+        const scale = 2.0 / height;
         const avatar = new THREE.Group();
         avatar.name = `${id}-rigged-interviewer-object`;
         gltf.scene.scale.setScalar(scale);
         gltf.scene.position.set(
           -(modelBounds.min.x + modelBounds.max.x) * 0.5 * scale,
-          0.86 - modelBounds.min.y * scale,
+          0,
           -(modelBounds.min.z + modelBounds.max.z) * 0.5 * scale,
         );
+        gltf.scene.updateMatrixWorld(true);
+        let pelvis = null;
+        gltf.scene.traverse((node) => {
+          if (node.isBone && /^(pelvis|hips)$/i.test(node.name)) pelvis = node;
+        });
+        if (pelvis) {
+          const pelvisHeight = pelvis.getWorldPosition(new THREE.Vector3()).y;
+          gltf.scene.position.y += 1.335 - pelvisHeight;
+        } else {
+          gltf.scene.position.y = 1.335 - 0.055 * scale;
+        }
         avatar.add(gltf.scene);
         const fallback = this.characters.get(id);
         if (!fallback) return;
@@ -380,6 +393,10 @@ export class InterviewScene {
         avatar.visible = fallback.visible;
         const mixer = new THREE.AnimationMixer(gltf.scene);
         const actions = new Map(gltf.animations.map((clip) => [clip.name.toLowerCase(), mixer.clipAction(clip)]));
+        const bones = new Map();
+        gltf.scene.traverse((node) => {
+          if (node.isBone) bones.set(node.name.toLowerCase(), node);
+        });
         avatar.userData = {
           id,
           kind: "rigged",
@@ -387,6 +404,7 @@ export class InterviewScene {
           stateStartedAt: fallback.userData.stateStartedAt,
           phase: fallback.userData.phase,
           mixer,
+          bones,
           actions,
           clips: gltf.animations.map((clip) => clip.name.toLowerCase()),
           activeClip: "",
@@ -397,7 +415,8 @@ export class InterviewScene {
         if (this.actors.has(id)) this.actors.set(id, avatar);
         this.playRiggedState(avatar, avatar.userData.state);
         this.positionActors();
-      } catch {
+      } catch (error) {
+        console.warn(`Unable to load 3D interviewer asset: ${path}`, error);
         // Keep the local procedural avatar when a model asset is missing or cannot load.
       }
     }));
@@ -488,6 +507,17 @@ export class InterviewScene {
       const t = time + phase;
       if (actor.userData.kind === "rigged") {
         actor.userData.mixer.update(delta);
+        const elapsed = time - actor.userData.stateStartedAt;
+        const cycle = 0.5 + 0.5 * Math.sin(elapsed * 3.2 + phase);
+        const emphasis = state === "follow_up" ? 0.72 : state === "speaking" ? 0.48 : state === "reading_notes" ? 0.18 : 0.07;
+        const speakingSide = id === "portfolio" ? "l" : "r";
+        for (const side of ["l", "r"]) {
+          const active = side === speakingSide;
+          const upper = actor.userData.bones.get(`upperarm_${side}`);
+          const lower = actor.userData.bones.get(`lowerarm_${side}`);
+          if (upper) upper.rotation.x += (active ? 0.26 + cycle * emphasis : 0.18);
+          if (lower) lower.rotation.x += active ? 0.12 + cycle * emphasis * 0.7 : 0.08;
+        }
         continue;
       }
       const { head, mouth, arms, torso, upperBody } = actor.userData;
