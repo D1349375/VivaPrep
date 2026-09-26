@@ -393,10 +393,6 @@ export class InterviewScene {
         avatar.visible = fallback.visible;
         const mixer = new THREE.AnimationMixer(gltf.scene);
         const actions = new Map(gltf.animations.map((clip) => [clip.name.toLowerCase(), mixer.clipAction(clip)]));
-        const bones = new Map();
-        gltf.scene.traverse((node) => {
-          if (node.isBone) bones.set(node.name.toLowerCase(), node);
-        });
         avatar.userData = {
           id,
           kind: "rigged",
@@ -404,7 +400,6 @@ export class InterviewScene {
           stateStartedAt: fallback.userData.stateStartedAt,
           phase: fallback.userData.phase,
           mixer,
-          bones,
           actions,
           clips: gltf.animations.map((clip) => clip.name.toLowerCase()),
           activeClip: "",
@@ -507,17 +502,6 @@ export class InterviewScene {
       const t = time + phase;
       if (actor.userData.kind === "rigged") {
         actor.userData.mixer.update(delta);
-        const elapsed = time - actor.userData.stateStartedAt;
-        const cycle = 0.5 + 0.5 * Math.sin(elapsed * 3.2 + phase);
-        const emphasis = state === "follow_up" ? 0.72 : state === "speaking" ? 0.48 : state === "reading_notes" ? 0.18 : 0.07;
-        const speakingSide = id === "portfolio" ? "l" : "r";
-        for (const side of ["l", "r"]) {
-          const active = side === speakingSide;
-          const upper = actor.userData.bones.get(`upperarm_${side}`);
-          const lower = actor.userData.bones.get(`lowerarm_${side}`);
-          if (upper) upper.rotation.x += (active ? 0.26 + cycle * emphasis : 0.18);
-          if (lower) lower.rotation.x += active ? 0.12 + cycle * emphasis * 0.7 : 0.08;
-        }
         continue;
       }
       const { head, mouth, arms, torso, upperBody } = actor.userData;
