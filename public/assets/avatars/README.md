@@ -1,6 +1,6 @@
-# Replaceable 3D interviewer assets
+# Archived 3D interviewer assets
 
-The three portrait PNGs in `../interviewer-technical.png`, `../interviewer-portfolio.png`, and `../interviewer-logic.png` are the visual references for the final interviewer models. They are still used in profile and roster UI; the live room prefers a rigged 3D model when one is present and otherwise keeps its procedural fallback.
+The three portrait PNGs in `../interviewer-technical.png`, `../interviewer-portfolio.png`, and `../interviewer-logic.png` are still used in profile and roster UI. The current live room uses transparent interviewer pose sprite sheets and a 2D scene; these archived GLB specifications are not part of the live rendering path.
 
 ## Model files
 
@@ -23,6 +23,6 @@ Include separately named loopable clips where possible. Clip names are matched b
 - `FollowUp` or `Point` (a slight forward lean and emphasis gesture)
 - `Thinking` (brief gaze shift or reflective posture)
 
-The live room cross-fades between matching clips when the mock interview changes state. If a matching rigged model is absent, fails to load, or has no matching clip, the independent procedural character remains available.
+These clips describe the former 3D prototype direction. They are not loaded by the current live interview room.
 
-The current model files are intentionally not fabricated from the portrait PNGs. Those images do not contain the unseen sides, body geometry, rig, or animation data needed for a production 3D character; the rigged GLB assets need to be authored from the portraits as likeness references.
+The GLB files in this folder are exploratory prototypes from the earlier 3D direction. They are not loaded in the live room and have not been approved as production interviewer likenesses or animations. Keep them as review artifacts; the current 2D pose-sheet room is the supported rendering path.
