@@ -94,7 +94,16 @@ npm run dev
 
 Windows 也可設定 `VIVAPREP_SPEECH_MODE=windows-sapi` 使用本機語音辨識與合成，不需要 Gemini API key；錄音不會送至語音服務。此版本是回合制語音流程，尚未接入 Gemini Live API。
 
-語音面試在教授音訊實際播放結束後才啟動收音與回答等候計時。麥克風已授權時可直接開口；持續偵測到聲音後，停頓約 2.5 秒自動送出辨識，也可按「說完了，送出」。畫面顯示收音音量、辨識與考官思考狀態；辨識失敗時需按「重試收音」，可隨時改用文字或暫停麥克風。朗讀、辨識及產生下一題期間不會觸發停頓接話。若瀏覽器阻擋音訊自動播放，需按「播放問題」或選擇閱讀字幕。
+只要伺服器設定了 `GEMINI_API_KEY`，教授提問預設改用 Gemini TTS，即使語音辨識仍在本機（`whisper-local` 或 `windows-sapi`）；學生錄音仍留在本機，只有教授的題目文字送到 Google。該場沒有同意 Agent 處理時不送出，改用本機聲音；Gemini 連線或額度失敗時也自動改用本機聲音，不會整段沒聲音。要固定使用本機聲音可設 `VIVAPREP_TTS_MODE=local`。試聽方式：
+
+```powershell
+$env:GEMINI_API_KEY = "你的 Google AI Studio API key"
+npm run dev:agent
+```
+
+三位教授各有自己的聲線（`server/speech-adapter.js` 的 `voiceProfiles`）：林教授與周教授為男聲、陳教授為女聲。Gemini TTS 預設林教授 Charon、陳教授 Sulafat、周教授 Puck，並依角色帶入語氣說明；Google 文件沒有標示預建聲音的性別與口音，正式使用前請試聽。可用 `GEMINI_TTS_VOICE_TECHNICAL`、`GEMINI_TTS_VOICE_PORTFOLIO`、`GEMINI_TTS_VOICE_LOGIC` 改成其他聲音或 Extended Voice Library／Voice design 的 voice id；`node scripts/list-gemini-voices.mjs` 會列出台灣與中文候選聲音。本機模式改用 Windows OneCore zh-TW 聲音：林、周教授用 Zhiwei 男聲（語速與音高不同），陳教授用 Yating 女聲；沒有 OneCore 聲音時退回桌面 SAPI。
+
+語音面試在教授音訊實際播放結束後才啟動收音與回答等候計時。麥克風已授權時可直接開口。收音判斷會從最近 4 秒最安靜的音量估計環境噪音，開口門檻是噪音的 3 倍（至少 0.02），並分開設定開口與持續說話兩個門檻，所以風扇、冷氣等穩定噪音不會被當成說話；停頓約 1.6 秒自動送出辨識，單次回答最長收音 60 秒，也可按「說完了，送出」。畫面顯示收音音量、辨識與考官思考狀態；辨識失敗時會先自動再聽一次，同一題再失敗才需要按「重試收音」；本機 Whisper 逾時被終止後會在背景自動重新載入，可隨時改用文字或暫停麥克風。朗讀、辨識及產生下一題期間不會觸發停頓接話。若瀏覽器阻擋音訊自動播放，需按「播放問題」或選擇閱讀字幕。
 
 說完題目後約 8 秒仍無回答，考官會明確降低難度、換個方式問；改問後再等 12 秒無回答就換到新話題。每題標記實際提問重點，面板排除近期重複重點與高度相似問句；候選題皆重複時再請 Gemini 產生新話題。這是互動策略，不把沒有收到語音的狀態當成學生能力不足。
 
@@ -153,7 +162,7 @@ Gemini 復盤會分析完整逐字稿與回答：單段最多六回合，或在�
 
 面試室目前使用平面面試室照片與去背的教授動作圖；發問、聆聽、翻閱筆記和思考時會切換姿勢圖片，不需要 WebGL。3D 角色開發暫緩，現有模型與製作規格保留於 `public/assets/avatars/README.md`。
 
-設備檢查頁提供選用的本機鏡頭試測，預覽含頭部與上半身虛線取景提示。勾選後，面試中由 MediaPipe Face/Pose Landmarker 在瀏覽器 Worker 估計頭部方向代理值、臉部／肩部涵蓋率和上半身位移，並連到當題 `turnId`、教授與互動階段。視覺套件與 WASM 由本機伺服器提供；首次載入仍需瀏覽器連線至 Google Storage 取得臉部和姿勢模型檔。原始攝影機影格永不傳到 VivaPrep 伺服器。衍生摘要預設只留在目前頁面；使用者另行同意後，摘要才會送給 Agent 復盤。若同時選擇保存私人歷史，摘要會加密保存並可隨該筆歷史刪除，不會加入共用心得。這些指標尚未以人工標註驗證，不提供眼球注視判定或面試表現評分。
+設備檢查頁提供選用的本機鏡頭試測，預覽含頭部與上半身虛線取景提示。勾選後，面試中由 MediaPipe Face/Pose Landmarker 在瀏覽器 Worker 取得臉部特徵點、眼球 blendshape 與上半身特徵點，連到當題 `turnId`、教授與互動階段。開場前約 3 秒為個人校正（坐正、看著考官），之後以校正為基準估計：視線方向（看向考官／低頭／看旁邊／往上看，結合頭部角度與眼球方向，眨眼時不判斷）、坐姿（頭肩下沉、肩膀歪斜）、手部靠近臉部、上半身晃動，以及連續低頭或移開視線的次數與最長秒數。移動電腦或座位後可按「重新校正」。復盤頁的「姿態與視線回饋」只看回答時段：每項給出數值、等級（保持／留意／優先改善）、為什麼重要與一個練習方法，指出最明顯的題目，並以每題的視線分布條呈現；未校正或資料不足時只說明原因，不下判斷。門檻是設計上的經驗值（`src/camera-signals.js`），需用團隊錄製樣本校正。視覺套件與 WASM 由本機伺服器提供；首次載入仍需瀏覽器連線至 Google Storage 取得臉部和姿勢模型檔。原始攝影機影格永不傳到 VivaPrep 伺服器。衍生摘要預設只留在目前頁面；使用者另行同意後，摘要才會送給 Agent 復盤。若同時選擇保存私人歷史，摘要會加密保存並可隨該筆歷史刪除，不會加入共用心得。這些指標尚未以人工標註驗證，視線是相對校正的估計而非眼動儀量測，不構成面試表現評分。檢查：`node scripts/check-camera-feedback.mjs`、`node scripts/check-voice-profiles.mjs --local`。
 
 目前沒有 Gemini Live、Google Drive／Workspace 匯入或 Google Cloud 部署整合。Gemini 教授 Agent 可透過 Gemini API 或 Antigravity CLI 提供回合制文字推論；CLI 模式以 PDF.js 在本機伺服器抽取文字後交給 CLI，API 模式保留 Gemini 原生 PDF 輸入。本機 SAPI、Gemini STT/TTS 和 MediaPipe 是其他可選或已接入的 Google 元件。Drive、Live 和 Cloud 部署仍屬規劃，簡報應依實際完成狀態描述。
 

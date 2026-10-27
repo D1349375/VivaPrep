@@ -66,7 +66,10 @@ export class CliConversation {
   #next() {
     if (this.closed || this.current || !this.queue.length) return;
     const request=this.queue.shift();this.current=request;this.lastUsed=Date.now();
-    request.timer=setTimeout(() => this.close(new AgentError("AGENT_TIMEOUT", this.isPortfolio ? "Gemini 整理這份備審逾時，請重試未完成的文件。" : "考官回應逾時，請重試或換下一題。",504)),this.timeoutMs);
+    // The first request on a new CLI process measured 15-30 s; later ones 3-5 s.
+    const timeoutMs=this.started ? this.timeoutMs : Math.max(this.timeoutMs,60000);
+    this.started=true;
+    request.timer=setTimeout(() => this.close(new AgentError("AGENT_TIMEOUT", this.isPortfolio ? "Gemini 整理這份備審逾時，請重試未完成的文件。" : "考官回應逾時，請重試或換下一題。",504)),timeoutMs);
     this.child.stdin.write(JSON.stringify({event:"user",message:{role:"user",content:[{type:"text",text:request.prompt}]}})+"\n");
   }
 

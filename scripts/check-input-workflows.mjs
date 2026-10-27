@@ -3,6 +3,8 @@ import vm from "node:vm";
 import { readFile } from "node:fs/promises";
 import { webcrypto } from "node:crypto";
 import { InterviewTiming } from "../src/interview-timing.js";
+import { buildPostureFeedback } from "../src/posture-feedback.js";
+import { VoiceActivityDetector } from "../src/voice-activity.js";
 import { OpeningPlanner } from "../server/opening-planner.js";
 import { InterviewOrchestrator } from "../server/interview-orchestrator.js";
 import { PanelCoordinator } from "../server/panel-coordinator.js";
@@ -31,7 +33,7 @@ const sandbox = vm.createContext({ console, Blob, Buffer, URL, Uint8Array, Uint3
   readPortfolioLibrary: async (scope) => structuredClone(savedLibraries.get(scope) || null),
   writePortfolioLibrary: async (scope, snapshot) => { savedLibraries.set(scope, structuredClone(snapshot)); },
   deletePortfolioLibrary: async (scope) => { savedLibraries.delete(scope); },
-  MediaStream: Stream, InterviewTiming, createCameraAnalyzer: () => ({}), percent: (value) => value * 100,
+  MediaStream: Stream, InterviewTiming, createCameraAnalyzer: () => ({}), buildPostureFeedback, VoiceActivityDetector, percent: (value) => value * 100,
   EventSource: class { addEventListener() {} close() {} },
   document: { getElementById: (id) => elements.get(id) || null, querySelector: () => null, body: { classList: element.classList } },
   window: { localStorage: { getItem(key) { return savedPreferences.get(key) || null; }, setItem(key,value) { savedPreferences.set(key,value); } }, addEventListener() {}, scrollTo() {} }, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},

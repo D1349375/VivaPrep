@@ -1,14 +1,9 @@
+import { BASELINE_SAMPLE_COUNT, extractSignals, computeBaseline, classifyAttention, classifyPosture } from "./camera-signals.js";
+
 const TARGET_FPS = 10;
 const MIN_SAMPLE_INTERVAL_MS = 1000 / TARGET_FPS;
 const MAX_INTERVAL_FOR_COVERAGE_MS = 250;
-const BASELINE_SAMPLE_COUNT = 20;
-
-function median(values) {
-  if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-}
+const EPISODE_MIN_MS = 1000;
 
 function percent(value) { return `${Math.round(value * 100)}%`; }
 
@@ -26,8 +21,8 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
   let sampleCount = 0;
   let firstSampleAt = null;
   let droppedFrames = 0;
-  let baseline = [];
-  let neutralYaw = null;
+  let baselineSamples = [];
+  let baseline = null;
   let segments = new Map();
   let status = "idle";
   let errorMessage = "";
@@ -52,6 +47,17 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
         poseValidMs: 0,
         zonesMs: { left: 0, center: 0, right: 0 },
         unknownMs: 0,
+        attentionMs: { screen: 0, down: 0, side: 0, up: 0 },
+        attentionUnknownMs: 0,
+        gazeAvailableMs: 0,
+        postureValidMs: 0,
+        tiltedMs: 0,
+        slumpedMs: 0,
+        handNearFaceMs: 0,
+        awayEpisodes: 0,
+        longestAwayMs: 0,
+        longestDownMs: 0,
+        awayRun: null,
         motionRates: [],
         samples: 0,
       });
@@ -60,8 +66,8 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
   }
 
   function classifyYaw(value) {
-    if (value == null || neutralYaw == null) return "unknown";
-    const delta = value - neutralYaw;
+    if (value == null || baseline?.yaw == null) return "unknown";
+    const delta = value - baseline.yaw;
     if (delta < -0.1) return "left";
     if (delta > 0.1) return "right";
     return "center";
@@ -87,12 +93,22 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
         poseCoverage: segment.poseValidMs / denominator,
         headOrientationRatios: Object.fromEntries(Object.entries(segment.zonesMs).map(([zone, ms]) => [zone, ms / denominator])),
         unknownRatio: segment.unknownMs / denominator,
+        attentionRatios: Object.fromEntries(Object.entries(segment.attentionMs).map(([zone, ms]) => [zone, ms / denominator])),
+        attentionUnknownRatio: segment.attentionUnknownMs / denominator,
+        gazeCoverage: segment.gazeAvailableMs / denominator,
+        postureCoverage: segment.postureValidMs / denominator,
+        tiltedRatio: segment.postureValidMs ? segment.tiltedMs / segment.postureValidMs : null,
+        slumpedRatio: segment.postureValidMs ? segment.slumpedMs / segment.postureValidMs : null,
+        handNearFaceRatio: segment.postureValidMs ? segment.handNearFaceMs / segment.postureValidMs : null,
+        awayEpisodes: segment.awayEpisodes + (segment.awayRun?.ms >= EPISODE_MIN_MS ? 1 : 0),
+        longestAwayMs: Math.round(Math.max(segment.longestAwayMs, segment.awayRun?.ms || 0)),
+        longestDownMs: Math.round(Math.max(segment.longestDownMs, segment.awayRun?.zone === "down" ? segment.awayRun.ms : 0)),
         averageTorsoDisplacementPerSecond: averageMotion,
         torsoDisplacementP90PerSecond: segment.motionRates.length ? [...segment.motionRates].sort((a, b) => a - b)[Math.floor((segment.motionRates.length - 1) * 0.9)] : null,
       };
     });
     return {
-      schemaVersion: "camera-trial-v1",
+      schemaVersion: "camera-trial-v2",
       captureMode: "local-only",
       savedToServer: false,
       startedAtOffset: 0,
@@ -100,14 +116,18 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
       targetFps: TARGET_FPS,
       actualFps: sampleCount * 1000 / sampleElapsedMs,
       droppedFrames,
-      calibration: neutralYaw == null ? "calibrating" : "head-pose-proxy-calibrated",
+      calibration: baseline ? "camera-baseline-calibrated" : "calibrating",
       status,
       errorMessage,
       latest: lastSample ? {
         faceValid: lastSample.faceValid,
         poseValid: lastSample.poseValid,
         headOrientation: lastSample.headOrientation,
+        attention: lastSample.attention,
+        posture: lastSample.posture,
         torsoDisplacementPerSecond: lastSample.torsoDisplacementPerSecond,
+        signals: { pitch: lastSample.pitch, yaw: lastSample.yaw, gazeV: lastSample.gazeV, gazeH: lastSample.gazeH },
+        baseline,
       } : null,
       segments: rows,
     };
@@ -115,19 +135,31 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
 
   function notify() { onUpdate(buildSummary()); }
 
-  function acceptSample(sample) {
+  function closeAwayRun(segment) {
+    const run = segment.awayRun;
+    if (!run) return;
+    if (run.ms >= EPISODE_MIN_MS) segment.awayEpisodes++;
+    segment.longestAwayMs = Math.max(segment.longestAwayMs, run.ms);
+    if (run.zone === "down") segment.longestDownMs = Math.max(segment.longestDownMs, run.ms);
+    segment.awayRun = null;
+  }
+
+  function acceptSample(raw) {
     inFlight = false;
     sampleCount++;
-    if (firstSampleAt == null) firstSampleAt = sample.timestamp;
-    let yaw = sample.yawProxy;
-    if (sample.faceValid && Number.isFinite(yaw) && neutralYaw == null) {
-      baseline.push(yaw);
-      if (baseline.length >= BASELINE_SAMPLE_COUNT) {
-        neutralYaw = median(baseline);
+    if (firstSampleAt == null) firstSampleAt = raw.timestamp;
+    const sample = { ...raw, ...extractSignals(raw) };
+    // Baseline: the first steady seconds of looking at the interviewer.
+    if (!baseline && sample.faceValid && Number.isFinite(sample.yaw) && Number.isFinite(sample.pitch)) {
+      baselineSamples.push(sample);
+      if (baselineSamples.length >= BASELINE_SAMPLE_COUNT) {
+        baseline = computeBaseline(baselineSamples);
         status = "measuring";
       } else status = "calibrating";
     }
-    const orientation = classifyYaw(yaw);
+    const orientation = classifyYaw(sample.yaw);
+    const attention = classifyAttention(sample, baseline);
+    const posture = classifyPosture(sample, baseline);
     let motionRate = null;
     if (sample.poseValid && sample.shoulderCenter && sample.shoulderWidth && lastSample?.poseValid && lastSample?.shoulderCenter) {
       const deltaMs = sample.timestamp - lastSample.timestamp;
@@ -137,7 +169,7 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
         motionRate = distance / width / (deltaMs / 1000);
       }
     }
-    const current = { ...sample, headOrientation: orientation, torsoDisplacementPerSecond: motionRate };
+    const current = { ...sample, headOrientation: orientation, attention, posture, torsoDisplacementPerSecond: motionRate };
     const contextKey = keyFor(sample.context || {});
     let segment = ensureSegment(sample.context || {});
     if (lastSample && lastSample.contextKey === contextKey) {
@@ -149,6 +181,21 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
       else if (orientation === "center") segment.zonesMs.center += interval;
       else if (orientation === "right") segment.zonesMs.right += interval;
       else segment.unknownMs += interval;
+      if (attention === "unknown") segment.attentionUnknownMs += interval;
+      else segment.attentionMs[attention] += interval;
+      if (Number.isFinite(sample.gazeV) && !(sample.blink > 0.5)) segment.gazeAvailableMs += interval;
+      if (posture.valid) {
+        segment.postureValidMs += interval;
+        if (posture.tilted) segment.tiltedMs += interval;
+        if (posture.slumped) segment.slumpedMs += interval;
+        if (posture.handNearFace) segment.handNearFaceMs += interval;
+      }
+      // Continuous stretches of looking down or aside; glances under a second are not episodes.
+      if (attention === "down" || attention === "side") {
+        if (segment.awayRun && segment.awayRun.zone !== attention) closeAwayRun(segment);
+        segment.awayRun ||= { zone: attention, ms: 0 };
+        segment.awayRun.ms += interval;
+      } else if (attention !== "unknown") closeAwayRun(segment);
       if (Number.isFinite(motionRate)) segment.motionRates.push(motionRate);
       segment.endedOffsetMs = Math.max(segment.startedOffsetMs, Math.round(sample.timestamp - startedAt));
     }
@@ -226,8 +273,8 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
     sampleCount = 0;
     firstSampleAt = null;
     droppedFrames = 0;
-    baseline = [];
-    neutralYaw = null;
+    baselineSamples = [];
+    baseline = null;
     lastSample = null;
     segments = new Map();
     // MediaPipe Tasks loads its WebAssembly glue with importScripts(). Keep this
@@ -283,6 +330,14 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
 
   function snapshot() { return buildSummary(); }
 
+  // Restart calibration, e.g. after the student moves the laptop or chair.
+  function recalibrate() {
+    baselineSamples = [];
+    baseline = null;
+    if (running) status = "calibrating";
+    notify();
+  }
+
   function stop({ keepSummary = true } = {}) {
     const result = buildSummary();
     running = false;
@@ -302,7 +357,7 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
     return keepSummary ? { ...result, status: "stopped" } : null;
   }
 
-  return { start, setVideo, snapshot, stop };
+  return { start, setVideo, snapshot, stop, recalibrate };
 }
 
 export { percent };

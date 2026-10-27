@@ -843,10 +843,10 @@ export class InterviewOrchestrator {
     if (!session.voiceEnabled) return;
     try {
       const started = performance.now();
-      const audio = await this.speechAdapter.synthesize(event.utterance);
+      const audio = await this.speechAdapter.synthesize(event.utterance, { speakerId: event.speakerId, allowCloud: session.consentSnapshot?.modelProcessing === true });
       if (!["active", "closing"].includes(session.status) || session.currentEvent?.seq !== event.seq || this.store.get(session.id) !== session) { audio.buffer.fill(0); return; }
       session.audioBySequence.set(event.seq, audio);
-      this.#recordTiming(session, "synthesis", started, { turnId: event.turnId, eventSeq: event.seq });
+      this.#recordTiming(session, "synthesis", started, { turnId: event.turnId, eventSeq: event.seq, provider: audio.provider || "local", ...(audio.fallbackReason ? { fallbackReason: audio.fallbackReason } : {}) });
       event.audioUrl = "/api/sessions/" + session.id + "/events/" + event.seq + "/audio";
       this.store.emit(session.id, { type: "interview.audio.ready", turnId: event.turnId, eventSeq: event.seq, audioUrl: event.audioUrl });
     } catch (error) {

@@ -212,6 +212,11 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
           });
           return;
         }
+        if (method === "POST" && pathname === "/api/agent/prewarm") {
+          // Sends no student data; it only opens a model connection ahead of the interview.
+          json(response, 202, { warming: agentService.prewarm() });
+          return;
+        }
         if (method === "GET" && pathname === "/api/profiles") {
           json(response, 200, { profiles: getProfiles() });
           return;
@@ -450,11 +455,16 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
               : pathname.replace(/^[/\\]+/, "");
       const filePath = resolve(join(rootPath, relative));
       if (filePath !== rootPath && !filePath.startsWith(rootPath + sep)) return response.writeHead(403).end("Forbidden");
-      const info = await stat(filePath);
-      if (!info.isFile()) return response.writeHead(404).end("Not found");
+      const info = await stat(filePath).catch((error) => { if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null; throw error; });
+      if (!info?.isFile()) return response.writeHead(404).end("Not found");
+      // Revalidate instead of re-downloading: large images and vendor bundles
+      // come back as 304 when unchanged.
+      const etag = `W/"${info.size.toString(16)}-${Math.floor(info.mtimeMs).toString(16)}"`;
+      if (request.headers["if-none-match"] === etag) return response.writeHead(304, { ETag: etag, "Cache-Control": "no-cache" }).end();
       response.writeHead(200, {
         "Content-Type": contentTypes[extname(filePath).toLowerCase()] || "application/octet-stream",
-        "Cache-Control": "no-store",
+        "Cache-Control": "no-cache",
+        ETag: etag,
         "X-Content-Type-Options": "nosniff",
         "Content-Length": info.size,
       });

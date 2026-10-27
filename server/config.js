@@ -4,6 +4,9 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
 export const projectRoot = fileURLToPath(new URL("../", import.meta.url));
+
+// Local secrets such as GEMINI_API_KEY live in an untracked .env file.
+try { process.loadEnvFile(join(projectRoot, ".env")); } catch (error) { if (error.code !== "ENOENT") throw error; }
 export const dataDirectory = join(projectRoot, ".data");
 export const cliWorkDirectory = join(tmpdir(), "vivaprep-" + process.pid + "-cli-work");
 
@@ -28,6 +31,9 @@ export const config = {
       ? "windows-sapi"
       : "off",
   geminiApiKey: process.env.GEMINI_API_KEY || "",
+  // Professor voices: Gemini TTS whenever a key is set, even with local speech
+  // recognition; VIVAPREP_TTS_MODE=local keeps Windows voices only.
+  ttsMode: process.env.VIVAPREP_TTS_MODE === "local" || !process.env.GEMINI_API_KEY ? "local" : "gemini",
   speechPowerShellPath: process.env.VIVAPREP_SPEECH_POWERSHELL_PATH || "powershell.exe",
   speechFfmpegPath: process.env.VIVAPREP_FFMPEG_PATH || "ffmpeg.exe",
   speechPythonPath: process.env.VIVAPREP_SPEECH_PYTHON_PATH || join(dataDirectory, "speech-venv", "Scripts", "python.exe"),
@@ -35,6 +41,11 @@ export const config = {
   sttModel: process.env.GEMINI_STT_MODEL || "gemini-3.5-transcribe",
   ttsModel: process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts",
   ttsVoice: process.env.GEMINI_TTS_VOICE || "Kore",
+  ttsSpeakerVoices: Object.fromEntries(Object.entries({
+    technical: process.env.GEMINI_TTS_VOICE_TECHNICAL,
+    portfolio: process.env.GEMINI_TTS_VOICE_PORTFOLIO,
+    logic: process.env.GEMINI_TTS_VOICE_LOGIC,
+  }).filter(([, voice]) => voice)),
   bootstrapAdminEmail: process.env.VIVAPREP_BOOTSTRAP_ADMIN_EMAIL || "",
   appSecret: process.env.VIVAPREP_APP_SECRET || "",
   publicUrl: process.env.VIVAPREP_PUBLIC_URL || `http://${process.env.HOST || "127.0.0.1"}:${Number(process.env.PORT || 4173)}`,

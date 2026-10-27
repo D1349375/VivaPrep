@@ -2,13 +2,29 @@ import { AgentError } from "./agent-provider.js";
 import { spawn } from "node:child_process";
 import { LocalWhisper } from "./local-whisper.js";
 
+// One voice per professor so the panel is distinguishable by ear.
+// Gemini prebuilt voices are chosen by their documented character; confirm
+// gender and accent by listening, and override per speaker with
+// GEMINI_TTS_VOICE_TECHNICAL / _PORTFOLIO / _LOGIC (see scripts/list-gemini-voices.mjs).
+// Local voices are Windows OneCore zh-TW voices (Zhiwei male, Yating/Hanhan female).
+export const voiceProfiles = {
+  technical: { name: "林教授", gender: "Male", geminiVoice: "Charon", localVoices: ["Zhiwei"], rate: 0.9, pitch: "-6%",
+    style: "資深大學教授在面試中提問：沉穩、清楚、語速適中，咬字精準，不誇張。" },
+  portfolio: { name: "陳教授", gender: "Female", geminiVoice: "Sulafat", localVoices: ["Yating", "Hanhan"], rate: 0.95, pitch: "+0%",
+    style: "大學教授在面試中提問：溫和、有耐心，語氣親切但專業，語速稍慢。" },
+  logic: { name: "周教授", gender: "Male", geminiVoice: "Puck", localVoices: ["Zhiwei"], rate: 1.1, pitch: "+6%",
+    style: "較年輕的大學教授在面試中追問：好奇、輕快，像自然對話一樣延伸問題。" },
+};
+
 export class SpeechAdapter {
-  constructor({ mode, apiKey, sttModel, ttsModel, voice, maxAudioBytes, powerShellPath = "powershell.exe", ffmpegPath = "ffmpeg.exe", pythonPath, whisperModelPath }) {
+  constructor({ mode, ttsMode = "local", apiKey, sttModel, ttsModel, voice, speakerVoices = {}, maxAudioBytes, powerShellPath = "powershell.exe", ffmpegPath = "ffmpeg.exe", pythonPath, whisperModelPath }) {
     this.mode = mode;
+    this.ttsMode = ttsMode;
     this.apiKey = apiKey;
     this.sttModel = sttModel;
     this.ttsModel = ttsModel;
     this.voice = voice;
+    this.speakerVoices = speakerVoices;
     this.maxAudioBytes = maxAudioBytes;
     this.powerShellPath = powerShellPath;
     this.ffmpegPath = ffmpegPath;
@@ -18,14 +34,21 @@ export class SpeechAdapter {
   async initialize() { if (this.whisper) await this.whisper.initialize(); }
   close() { this.whisper?.close(); }
 
+  // Gemini TTS is used whenever a key is configured, also beside local recognition.
+  get usesGeminiTts() { return Boolean(this.apiKey) && (this.mode === "gemini" || this.ttsMode === "gemini"); }
+
   status() {
-    if (this.whisper) return { available: true, provider: "whisper-local", sttModel: "Whisper small / CPU int8", ttsModel: "Windows Speech Synthesis (zh-TW)", processingLocation: "local" };
+    const localVoices = "Windows zh-TW voices (per professor)";
+    const tts = this.usesGeminiTts
+      ? { ttsModel: this.ttsModel, ttsLocation: "cloud", ttsFallback: process.platform === "win32" ? localVoices : null }
+      : { ttsModel: localVoices, ttsLocation: "local", ttsFallback: null };
+    if (this.whisper) return { available: true, provider: "whisper-local", sttModel: "Whisper small / CPU int8", ...tts, processingLocation: "local" };
     if (this.mode === "windows-sapi" && process.platform === "win32") {
       return {
         available: true,
         provider: "windows-sapi-local",
         sttModel: "Windows Speech Recognition (zh-TW)",
-        ttsModel: "Windows Speech Synthesis (zh-TW)",
+        ...tts,
         processingLocation: "local",
       };
     }
@@ -33,7 +56,7 @@ export class SpeechAdapter {
       available: this.mode === "gemini" && Boolean(this.apiKey),
       provider: this.mode === "gemini" ? "gemini" : "off",
       sttModel: this.mode === "gemini" ? this.sttModel : null,
-      ttsModel: this.mode === "gemini" ? this.ttsModel : null,
+      ...(this.mode === "gemini" ? tts : { ttsModel: null, ttsLocation: null, ttsFallback: null }),
       processingLocation: this.mode === "gemini" ? "cloud" : null,
     };
   }
@@ -65,14 +88,37 @@ export class SpeechAdapter {
     }
   }
 
-  async synthesize(text) {
+  voiceFor(speakerId) {
+    const profile = voiceProfiles[speakerId];
+    return {
+      profile,
+      geminiVoice: this.speakerVoices[speakerId] || profile?.geminiVoice || this.voice,
+      style: profile?.style || "speaking naturally",
+    };
+  }
+
+  // allowCloud=false keeps a session's text off Google when it has no model-processing consent.
+  async synthesize(text, { speakerId, allowCloud = true } = {}) {
     this.#assertAvailable();
-    if (this.mode === "windows-sapi" || this.whisper) return this.#synthesizeLocally(String(text).slice(0, 1200));
+    const { profile, geminiVoice, style } = this.voiceFor(speakerId);
+    const spoken = String(text).slice(0, 1200);
+    const canSpeakLocally = process.platform === "win32";
+    if (!this.usesGeminiTts || (!allowCloud && this.mode !== "gemini")) return this.#synthesizeLocally(spoken, profile);
+    try {
+      return { ...await this.#synthesizeWithGemini(spoken, geminiVoice, style), provider: "gemini" };
+    } catch (error) {
+      // A demo should keep talking when the network or quota fails.
+      if (!canSpeakLocally) throw error;
+      return { ...await this.#synthesizeLocally(spoken, profile), provider: "local-fallback", fallbackReason: error.code || "SYNTHESIS_FAILED" };
+    }
+  }
+
+  async #synthesizeWithGemini(text, geminiVoice, style) {
     const response = await this.#interact({
       model: this.ttsModel,
-      input: [{ type: "user_input", content: [{ type: "text", text: String(text).slice(0, 1200), annotations: [{ type: "speech_metadata", style: "speaking naturally" }] }] }],
+      input: [{ type: "user_input", content: [{ type: "text", text, annotations: [{ type: "speech_metadata", style }] }] }],
       response_format: { type: "audio", mime_type: "audio/wav", sample_rate: 24000 },
-      generation_config: { speech_config: [{ voice: this.voice }] },
+      generation_config: { speech_config: [{ voice: geminiVoice }] },
     });
     const audioContent = response?.steps?.flatMap((step) => step?.content || []).filter((item) => item?.type === "audio").at(-1);
     const encoded = response?.output_audio?.data || audioContent?.data;
@@ -123,24 +169,57 @@ export class SpeechAdapter {
     if ((this.mode !== "gemini" || !this.apiKey) && this.mode !== "windows-sapi" && !this.whisper) throw new AgentError("SPEECH_UNAVAILABLE", "語音服務尚未設定；請改用文字輸入。");
   }
 
-  async #synthesizeLocally(text) {
-    const encodedText = Buffer.from(text, "utf8").toString("base64");
+  async #synthesizeLocally(text, profile) {
+    const request = { text, voices: profile?.localVoices || [], gender: profile?.gender || "", rate: profile?.rate || 1, pitch: profile?.pitch || "+0%" };
+    const encodedRequest = Buffer.from(JSON.stringify(request), "utf8").toString("base64");
+    // OneCore voices (WinRT) include a male zh-TW voice; desktop SAPI usually
+    // only has Hanhan, so it stays as the fallback.
     const script = `
-Add-Type -AssemblyName System.Speech
-$encodedText = [Console]::In.ReadToEnd().Trim()
-$text = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedText))
-$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$stream = New-Object System.IO.MemoryStream
-try {
-  $voice = $synth.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -eq 'zh-TW' } | Select-Object -First 1
-  if ($null -eq $voice) { throw 'No enabled zh-TW SAPI voice.' }
-  $synth.SelectVoice($voice.VoiceInfo.Name)
-  $synth.SetOutputToWaveStream($stream)
-  $synth.Speak($text)
-  [Console]::Out.Write([Convert]::ToBase64String($stream.ToArray()))
-} finally { $stream.Dispose(); $synth.Dispose() }
+$ErrorActionPreference = 'Stop'
+$request = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd().Trim())) | ConvertFrom-Json
+$text = [string]$request.text
+function Speak-OneCore {
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  [Windows.Media.SpeechSynthesis.SpeechSynthesizer,Windows.Media.SpeechSynthesis,ContentType=WindowsRuntime] | Out-Null
+  [Windows.Storage.Streams.DataReader,Windows.Storage.Streams,ContentType=WindowsRuntime] | Out-Null
+  $asTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' } | Select-Object -First 1
+  function Await($operation, [Type]$type) { $task = $asTask.MakeGenericMethod($type).Invoke($null, @($operation)); try { $task.Wait(-1) | Out-Null } catch { throw $task.Exception.InnerException }; $task.Result }
+  $voices = @([Windows.Media.SpeechSynthesis.SpeechSynthesizer]::AllVoices | Where-Object { $_.Language -eq 'zh-TW' })
+  if ($voices.Count -eq 0) { throw 'No zh-TW OneCore voice.' }
+  $voice = $null
+  foreach ($name in @($request.voices)) { if (-not $voice) { $voice = $voices | Where-Object { $_.DisplayName -like "*$name*" } | Select-Object -First 1 } }
+  if (-not $voice -and $request.gender) { $voice = $voices | Where-Object { [string]$_.Gender -eq $request.gender } | Select-Object -First 1 }
+  if (-not $voice) { $voice = $voices[0] }
+  $synth = New-Object Windows.Media.SpeechSynthesis.SpeechSynthesizer
+  try {
+    $synth.Voice = $voice
+    $ssml = "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-TW'><prosody rate='" + [double]$request.rate + "' pitch='" + [string]$request.pitch + "'>" + [Security.SecurityElement]::Escape($text) + "</prosody></speak>"
+    $stream = Await ($synth.SynthesizeSsmlToStreamAsync($ssml)) ([Windows.Media.SpeechSynthesis.SpeechSynthesisStream])
+    $reader = New-Object Windows.Storage.Streams.DataReader($stream.GetInputStreamAt(0))
+    $size = [UInt32]$stream.Size
+    Await ($reader.LoadAsync($size)) ([UInt32]) | Out-Null
+    $bytes = New-Object byte[] $size
+    $reader.ReadBytes($bytes)
+    return ,$bytes
+  } finally { $synth.Dispose() }
+}
+function Speak-Desktop {
+  Add-Type -AssemblyName System.Speech
+  $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+  $stream = New-Object System.IO.MemoryStream
+  try {
+    $voice = $synth.GetInstalledVoices() | Where-Object { $_.Enabled -and $_.VoiceInfo.Culture.Name -eq 'zh-TW' } | Select-Object -First 1
+    if ($null -eq $voice) { throw 'No enabled zh-TW SAPI voice.' }
+    $synth.SelectVoice($voice.VoiceInfo.Name)
+    $synth.SetOutputToWaveStream($stream)
+    $synth.Speak($text)
+    return ,$stream.ToArray()
+  } finally { $stream.Dispose(); $synth.Dispose() }
+}
+try { $audio = Speak-OneCore } catch { $audio = Speak-Desktop }
+[Console]::Out.Write([Convert]::ToBase64String($audio))
 `;
-    const output = await this.#runProcess(this.powerShellPath, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], Buffer.from(encodedText, "ascii"), 8 * 1024 * 1024);
+    const output = await this.#runProcess(this.powerShellPath, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], Buffer.from(encodedRequest, "ascii"), 8 * 1024 * 1024);
     const audio = Buffer.from(output.toString("ascii").trim(), "base64");
     if (audio.length < 44 || audio.toString("ascii", 0, 4) !== "RIFF" || audio.toString("ascii", 8, 12) !== "WAVE") {
       throw new AgentError("SYNTHESIS_FAILED", "本機繁體中文語音合成沒有產生有效音訊。");

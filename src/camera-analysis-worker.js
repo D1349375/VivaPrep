@@ -3,12 +3,11 @@ const WASM_ROOT = `${MEDIAPIPE_ROOT}/wasm`;
 const FACE_MODEL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const POSE_MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
+const FACE_POINTS = [1, 10, 33, 152, 263];
+const POSE_POINTS = [0, 11, 12, 15, 16, 19, 20];
+
 let faceLandmarker;
 let poseLandmarker;
-
-function visible(point, threshold = 0.55) {
-  return Boolean(point && (point.visibility == null || point.visibility >= threshold));
-}
 
 self.onmessage = async ({ data }) => {
   if (data?.type === "init") {
@@ -20,7 +19,7 @@ self.onmessage = async ({ data }) => {
           baseOptions: { modelAssetPath: FACE_MODEL, delegate: "CPU" },
           runningMode: "VIDEO",
           numFaces: 1,
-          outputFaceBlendshapes: false,
+          outputFaceBlendshapes: true,
           outputFacialTransformationMatrixes: false,
         }),
         vision.PoseLandmarker.createFromOptions(files, {
@@ -42,27 +41,20 @@ self.onmessage = async ({ data }) => {
   try {
     const faceResult = faceLandmarker.detectForVideo(bitmap, timestamp);
     const poseResult = poseLandmarker.detectForVideo(bitmap, timestamp);
+    // Send only the landmarks the analyzer uses; signal math lives in camera-signals.js.
+    const pick = (points, indexes) => Object.fromEntries(indexes.filter((index) => points[index]).map((index) => [index, { x: points[index].x, y: points[index].y, visibility: points[index].visibility }]));
     const face = faceResult.faceLandmarks?.[0];
     const pose = poseResult.landmarks?.[0];
-    let yawProxy = null;
-    if (face?.[1] && face?.[33] && face?.[263]) {
-      const eyeDistance = Math.abs(face[33].x - face[263].x);
-      if (eyeDistance > 0.02) yawProxy = (face[1].x - (face[33].x + face[263].x) / 2) / eyeDistance;
-    }
-    const leftShoulder = pose?.[11];
-    const rightShoulder = pose?.[12];
-    const poseValid = visible(leftShoulder) && visible(rightShoulder);
-    const shoulderWidth = poseValid ? Math.abs(leftShoulder.x - rightShoulder.x) : 0;
-    const shoulderCenter = poseValid ? { x: (leftShoulder.x + rightShoulder.x) / 2, y: (leftShoulder.y + rightShoulder.y) / 2 } : null;
+    const blendshapes = faceResult.faceBlendshapes?.[0]?.categories
+      ? Object.fromEntries(faceResult.faceBlendshapes[0].categories.filter((item) => /^eye(Look|Blink)/.test(item.categoryName)).map((item) => [item.categoryName, item.score]))
+      : null;
     self.postMessage({
       type: "sample",
       timestamp,
       context,
-      faceValid: Boolean(face?.length),
-      yawProxy,
-      poseValid: Boolean(poseValid && shoulderWidth > 0.04),
-      shoulderWidth,
-      shoulderCenter,
+      face: face?.length ? pick(face, FACE_POINTS) : null,
+      blendshapes,
+      pose: pose?.length ? pick(pose, POSE_POINTS) : null,
     });
   } catch (error) {
     self.postMessage({ type: "sample-error", timestamp, context, message: error?.message || "影格分析失敗。" });

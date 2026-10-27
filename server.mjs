@@ -38,10 +38,12 @@ const agentService = new AgentService(provider);
 const store = new SessionStore({ database, sessionTtlMs: config.sessionTtlMs, applicationKey });
 const speechAdapter = new SpeechAdapter({
   mode: config.speechMode,
+  ttsMode: config.ttsMode,
   apiKey: config.geminiApiKey,
   sttModel: config.sttModel,
   ttsModel: config.ttsModel,
   voice: config.ttsVoice,
+  speakerVoices: config.ttsSpeakerVoices,
   maxAudioBytes: config.maxAudioBytes,
   powerShellPath: config.speechPowerShellPath,
   ffmpegPath: config.speechFfmpegPath,

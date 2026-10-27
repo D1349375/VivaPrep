@@ -1,5 +1,7 @@
 import { createCameraAnalyzer, percent } from "./camera-analysis.js";
 import { InterviewTiming } from "./interview-timing.js";
+import { buildPostureFeedback } from "./posture-feedback.js";
+import { VoiceActivityDetector } from "./voice-activity.js";
 import { PORTFOLIO_PARSER_VERSION, librarySnapshot, readPortfolioLibrary, writePortfolioLibrary, deletePortfolioLibrary, portfolioFileHash } from "./portfolio-library.js";
 
 const app = document.getElementById("app");
@@ -57,9 +59,10 @@ let audioPreparationTimer = null;
 let closingTimer = null;
 let audioPlayedSequence = null;
 let candidateActivitySequence = null;
-let speechDurationMs = 0;
+const voiceActivity = new VoiceActivityDetector();
+// Long noisy recordings made local Whisper time out; answers rarely need more.
+const MAX_ANSWER_RECORDING_MS = 60000;
 let lastAudioSampleAt = 0;
-let lastVoiceAt = 0;
 let microphoneLevel = 0;
 let voiceRequestGeneration = 0;
 let voiceCapture = null;
@@ -114,7 +117,7 @@ function selectedPortfolioClaims() {
   return state.claims.filter((claim) => !claim.documentId || selected.has(claim.documentId));
 }
 function preferenceScope() {
-  return JSON.stringify({ version: 1, agent: state.agentMode, audio: state.speechStatus?.provider || "none", location: state.speechStatus?.processingLocation || "none" });
+  return JSON.stringify({ version: 1, agent: state.agentMode, audio: state.speechStatus?.provider || "none", location: state.speechStatus?.processingLocation || "none", tts: state.speechStatus?.ttsLocation || "none" });
 }
 function loadPreferences() {
   const key = "vivaprep.permissions.v1." + (state.auth?.user?.userId || "guest");
@@ -154,7 +157,8 @@ function permissionSummary() {
 }
 function settingsPage() {
   const modelCopy = state.agentMode === "cli" ? "對話、目前編輯的主張與短摘錄會交給 Google Gemini 處理。" : state.agentMode === "gemini-api" ? "對話、目前編輯的主張與短摘錄會交給 Google Gemini API 處理。" : "目前使用本機示範；切換外部模型後會重新確認授權。";
-  const audioCopy = state.speechStatus?.processingLocation === "local" ? "錄音送至面試後端進行語音辨識；辨識文字會交給教授 Agent。" : "錄音送交已設定的雲端語音服務辨識，辨識文字交給教授 Agent。";
+  const ttsCopy = state.speechStatus?.ttsLocation === "cloud" ? "教授提問文字會送 Google Gemini TTS 產生語音；連線失敗時改用本機聲音。" : "";
+  const audioCopy = (state.speechStatus?.processingLocation === "local" ? "錄音送至面試後端進行語音辨識；辨識文字會交給教授 Agent。" : "錄音送交已設定的雲端語音服務辨識，辨識文字交給教授 Agent。") + ttsCopy;
   const row = (field, title, copy, disabled = false) => `<label class="toggle-row"><span><strong>${title}</strong><small>${copy}</small></span><input type="checkbox" data-preference="${field}" ${state[field] ? "checked" : ""} ${disabled || !state.preferencesReady ? "disabled" : ""} /><i></i></label>`;
   return `<div class="step-intro"><div class="eyebrow accent">PREFERENCES</div><h1>資料使用設定</h1><p>選擇一次，之後在這個瀏覽器沿用。訪客與不同帳號各自記住偏好；不會保存備審原檔或回答到瀏覽器設定中。你可以隨時關閉授權。</p></div><section class="setting-card permission-settings">
   ${row("consentModel", "允許 Agent 處理練習內容", modelCopy + " 未允許時無法開始 Gemini 面試。")}
@@ -302,7 +306,7 @@ async function api(path, options = {}) {
     if (response.status === 204) return null;
     result = await response.json().catch(() => ({}));
   }
-  if (!response.ok) throw new Error(result?.error?.message || "服務暫時無法完成要求。");
+  if (!response.ok) throw Object.assign(new Error(result?.error?.message || "服務暫時無法完成要求。"), { code: result?.error?.code || null });
   return result;
 }
 let authSessionRequest = null;
@@ -603,7 +607,7 @@ function ensureCameraPanel() {
   panel.id = "camera-trial-panel";
   panel.className = "camera-trial-panel is-collapsed";
   panel.setAttribute("aria-label", "本機鏡頭試測");
-  panel.innerHTML = '<div class="camera-trial-heading"><span><i></i>本機鏡頭試測</span><div class="camera-trial-actions"><button type="button" data-camera-panel-toggle aria-expanded="false">展開</button><button type="button" data-camera-stop aria-label="停止本機鏡頭試測">停止</button></div></div><div class="camera-trial-content"><video id="camera-trial-video" autoplay playsinline muted></video><div class="camera-trial-status" id="camera-trial-status">正在準備模型…</div><div class="camera-trial-metrics"><span>臉部可用<strong id="camera-face-quality">—</strong></span><span>肩部可用<strong id="camera-pose-quality">—</strong></span><span>頭部方向<strong id="camera-head-direction">—</strong></span><span>上半身移動<strong id="camera-body-motion">—</strong></span></div><div class="camera-trial-phase" id="camera-trial-phase">等候面試事件</div><small>畫面與數值僅留在此瀏覽器・不保存</small></div>';
+  panel.innerHTML = '<div class="camera-trial-heading"><span><i></i>本機鏡頭試測</span><div class="camera-trial-actions"><button type="button" data-camera-panel-toggle aria-expanded="false">展開</button><button type="button" data-camera-stop aria-label="停止本機鏡頭試測">停止</button></div></div><div class="camera-trial-content"><video id="camera-trial-video" autoplay playsinline muted></video><div class="camera-trial-status" id="camera-trial-status">正在準備模型…</div><div class="camera-trial-metrics"><span>臉部可用<strong id="camera-face-quality">—</strong></span><span>肩部可用<strong id="camera-pose-quality">—</strong></span><span>視線<strong id="camera-head-direction">—</strong></span><span>坐姿<strong id="camera-posture">—</strong></span><span>上半身移動<strong id="camera-body-motion">—</strong></span></div><button type="button" class="camera-recalibrate" data-camera-recalibrate>重新校正</button><div class="camera-trial-phase" id="camera-trial-phase">等候面試事件</div><small>畫面與數值僅留在此瀏覽器・不保存</small></div>';
   const toggle = panel.querySelector("[data-camera-panel-toggle]");
   toggle.addEventListener("click", () => {
     const collapsed = panel.classList.toggle("is-collapsed");
@@ -611,6 +615,7 @@ function ensureCameraPanel() {
     toggle.setAttribute("aria-expanded", String(!collapsed));
   });
   panel.querySelector("[data-camera-stop]").addEventListener("click", () => stopCameraTrial());
+  panel.querySelector("[data-camera-recalibrate]").addEventListener("click", () => cameraAnalyzer?.recalibrate?.());
   document.body.appendChild(panel);
   return panel;
 }
@@ -623,7 +628,7 @@ function updateCameraHud(summary) {
   const labels = {
     loading: "載入模型中…",
     "loading-model": "載入本機視覺模型中…",
-    calibrating: "請自然看螢幕中央完成個人基線校正",
+    calibrating: "校正中：請坐正、看著考官約 3 秒",
     measuring: "正在量測・本機處理",
     unavailable: summary.errorMessage || "模型無法使用",
     stopped: "試測已停止",
@@ -633,8 +638,10 @@ function updateCameraHud(summary) {
   const latest = summary.latest;
   panel.querySelector("#camera-face-quality").textContent = matching ? percent(matching.faceCoverage) : latest?.faceValid ? "有效" : "等待";
   panel.querySelector("#camera-pose-quality").textContent = matching ? percent(matching.poseCoverage) : latest?.poseValid ? "有效" : "等待";
-  const direction = latest?.headOrientation;
-  panel.querySelector("#camera-head-direction").textContent = direction === "left" ? "偏左" : direction === "right" ? "偏右" : direction === "center" ? "大致正面" : "校正中";
+  const attentionLabels = { screen: "看向考官", down: "低頭", side: "看旁邊", up: "往上看" };
+  panel.querySelector("#camera-head-direction").textContent = attentionLabels[latest?.attention] || (summary.status === "calibrating" ? "校正中" : "偵測不到臉");
+  const posture = latest?.posture;
+  panel.querySelector("#camera-posture").textContent = !posture?.valid ? "肩膀未入鏡" : posture.slumped ? "下沉" : posture.tilted ? "歪斜" : posture.handNearFace ? "手靠近臉" : "端正";
   const motion = latest?.torsoDisplacementPerSecond;
   panel.querySelector("#camera-body-motion").textContent = Number.isFinite(motion) ? `${motion.toFixed(2)} 肩寬/秒` : "累積中";
   const phaseLabels = {
@@ -862,7 +869,7 @@ function devicePage() {
       ? "Gemini 教授 Agent 會收到確認主張和面試對話"
       : "本機示範 Agent 不會外傳對話";
   const speechDisclosure = localSpeech
-    ? "錄音送至面試後端進行語音辨識，教授提問以語音朗讀"
+    ? state.speechStatus?.ttsLocation === "cloud" ? "錄音送至面試後端進行語音辨識，教授提問文字送 Google Gemini TTS 朗讀" : "錄音送至面試後端進行語音辨識，教授提問以本機語音朗讀"
     : state.speechStatus?.provider === "gemini"
       ? "錄音會送至 Google 語音服務辨識，教授提問由雲端合成"
       : "語音服務尚未啟用；可改用文字回答";
@@ -925,17 +932,35 @@ function cameraTrialReviewCard() {
     const movement = Number.isFinite(item.averageTorsoDisplacementPerSecond) ? `${item.averageTorsoDisplacementPerSecond.toFixed(2)} 肩寬／秒` : "有效樣本不足";
     return `<article class="camera-result-row"><strong>${esc(interviewer)}・${esc(phaseLabels[item.phase] || item.phase)}</strong><span>頭部方向代理：左 ${percent(zones.left)}／正面 ${percent(zones.center)}／右 ${percent(zones.right)}／未知 ${percent(item.unknownRatio)}</span><span>臉部涵蓋 ${percent(item.faceCoverage)}・肩部涵蓋 ${percent(item.poseCoverage)}・平均位移 ${esc(movement)}</span><small>${item.samples} 個推論結果・約 ${Math.round(item.observedMs / 1000)} 秒有時間涵蓋</small></article>`;
   }).join("");
-  const calibration = summary.calibration === "head-pose-proxy-calibrated" ? "完成頭部方向個人基線" : "未完成基線校正";
+  const calibration = ["camera-baseline-calibrated", "head-pose-proxy-calibrated"].includes(summary.calibration) ? "完成個人基線校正" : "未完成基線校正";
   const handling = state.cameraMetricsConsent
     ? `本場只把衍生摘要交給 Agent；${state.saveHistory ? "摘要也會加密保存於你的私人練習歷史。" : "未選擇保存歷史，因此完成後不會保留在帳號。"}`
     : "數值只在此瀏覽器暫存，沒有傳到伺服器或寫入資料庫。";
-  return `<section class="camera-results-card"><div class="eyebrow">LOCAL CAMERA ANALYSIS</div><h2>鏡頭試測紀錄</h2><p>${handling} 頭部方向只是代理指標，不代表眼球注視或面試評分；校正狀態：${esc(calibration)}・實際推論 ${summary.actualFps.toFixed(1)} FPS。</p>${rows || '<p class="subtle-copy">本場沒有足夠鏡頭樣本；可檢查攝影機畫面與瀏覽器權限後再試。</p>'}</section>`;
+  return `${postureFeedbackCard(buildPostureFeedback(summary, state.backendTurns))}<section class="camera-results-card"><details><summary>鏡頭原始數值（各時段）</summary><p>${handling} 視線與坐姿是相對開場校正的估計，不是眼動儀量測或面試評分；校正狀態：${esc(calibration)}・實際推論 ${summary.actualFps.toFixed(1)} FPS。</p>${rows || '<p class="subtle-copy">本場沒有足夠鏡頭樣本；可檢查攝影機畫面與瀏覽器權限後再試。</p>'}</details></section>`;
+}
+
+function postureFeedbackCard(feedback) {
+  if (!feedback) return "";
+  const levelLabels = { good: "保持", watch: "留意", improve: "優先改善", unknown: "資料不足" };
+  const limits = feedback.limits.length ? `<ul class="posture-limits">${feedback.limits.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>` : "";
+  if (!feedback.usable) return `<section class="posture-feedback-card"><div class="eyebrow">POSTURE & EYE CONTACT</div><h2>姿態與視線回饋</h2>${limits || '<p class="subtle-copy">本場鏡頭資料不足，無法產生姿態回饋。</p>'}</section>`;
+  const focus = feedback.priorities.length
+    ? `<div class="posture-focus"><strong>下一場先練：</strong>${feedback.priorities.map((card) => `<span>${esc(card.title)}</span>`).join("")}${feedback.strengths.length ? `<small>做得不錯：${feedback.strengths.map(esc).join("、")}</small>` : ""}</div>`
+    : `<div class="posture-focus"><strong>這場的姿態與視線都在穩定範圍。</strong><small>維持同樣的鏡頭高度與坐姿即可。</small></div>`;
+  const cards = feedback.cards.map((card) => `<article class="posture-card is-${card.level}"><header><span>${esc(card.title)}</span><b>${esc(levelLabels[card.level])}</b></header><strong>${esc(card.value)}</strong><p>${esc(card.detail)}</p><p class="posture-why">${esc(card.why)}</p><p class="posture-tip"><span>練習</span>${esc(card.tip)}</p></article>`).join("");
+  const zones = [["screen", "看向考官"], ["down", "低頭"], ["side", "看旁邊"], ["up", "往上看"]];
+  const timeline = feedback.perQuestion.map((row) => {
+    const bars = zones.map(([zone, label]) => Number.isFinite(row.attention[zone]) && row.attention[zone] > 0 ? `<i class="zone-${zone}" style="width:${(row.attention[zone] * 100).toFixed(1)}%" title="${label} ${Math.round(row.attention[zone] * 100)}%"></i>` : "").join("");
+    return `<article class="posture-question"><div><span class="transcript-index">${String(row.index + 1).padStart(2, "0")}</span><p>${esc(row.question)}</p></div><div class="attention-bar" aria-label="回答時的視線分布">${bars}</div><div class="posture-flags">${row.flags.length ? row.flags.map((flag) => `<span>${esc(flag)}</span>`).join("") : "<small>這題沒有明顯問題</small>"}</div></article>`;
+  }).join("");
+  const legend = zones.map(([zone, label]) => `<span><i class="zone-${zone}"></i>${label}</span>`).join("");
+  return `<section class="posture-feedback-card"><div class="eyebrow">POSTURE & EYE CONTACT</div><h2>姿態與視線回饋</h2><p class="subtle-copy">只看你回答的時段，數值相對開場校正的坐姿與視線估計，用來找練習方向，不是面試分數。</p>${focus}<div class="posture-cards">${cards}</div><h3>每一題的視線分布</h3><div class="attention-legend">${legend}</div><div class="posture-questions">${timeline}</div>${limits}</section>`;
 }
 
 function cameraMetricsForSubmission(summary) {
   if (!summary || !Array.isArray(summary.segments)) return null;
   return {
-    schemaVersion: "camera-trial-v1",
+    schemaVersion: summary.schemaVersion === "camera-trial-v2" ? "camera-trial-v2" : "camera-trial-v1",
     status: summary.status,
     calibration: summary.calibration,
     elapsedMs: summary.elapsedMs,
@@ -955,6 +980,16 @@ function cameraMetricsForSubmission(summary) {
       unknownRatio: item.unknownRatio,
       averageTorsoDisplacementPerSecond: item.averageTorsoDisplacementPerSecond,
       torsoDisplacementP90PerSecond: item.torsoDisplacementP90PerSecond,
+      attentionRatios: item.attentionRatios,
+      attentionUnknownRatio: item.attentionUnknownRatio,
+      gazeCoverage: item.gazeCoverage,
+      postureCoverage: item.postureCoverage,
+      tiltedRatio: item.tiltedRatio,
+      slumpedRatio: item.slumpedRatio,
+      handNearFaceRatio: item.handNearFaceRatio,
+      awayEpisodes: item.awayEpisodes,
+      longestAwayMs: item.longestAwayMs,
+      longestDownMs: item.longestDownMs,
     })),
   };
 }
@@ -964,7 +999,7 @@ function cameraHistoryMetricsMarkup(summary) {
   const movement = Number.isFinite(summary.averageTorsoDisplacementPerSecond)
     ? `${summary.averageTorsoDisplacementPerSecond.toFixed(2)} 肩寬／秒`
     : "樣本不足";
-  return `<div class="camera-history-metrics"><span>回答涵蓋 ${summary.answerSegments} 題</span><span>臉部可用 ${ratio(summary.faceCoverage)}</span><span>肩部可用 ${ratio(summary.poseCoverage)}</span><span>頭部朝前代理 ${ratio(summary.headForwardRatio)}</span><span>上半身平均位移 ${esc(movement)}</span></div><small class="subtle-copy">頭部方向不是眼球注視；這些未經人工標註驗證的數值不構成表現分數。</small>`;
+  return `<div class="camera-history-metrics"><span>回答涵蓋 ${summary.answerSegments} 題</span><span>臉部可用 ${ratio(summary.faceCoverage)}</span><span>肩部可用 ${ratio(summary.poseCoverage)}</span>${Number.isFinite(summary.screenRatio) ? `<span>看向考官 ${ratio(summary.screenRatio)}</span><span>低頭 ${ratio(summary.downRatio)}</span><span>坐姿下沉或歪斜 ${ratio(summary.postureIssueRatio)}</span>` : `<span>頭部朝前代理 ${ratio(summary.headForwardRatio)}</span>`}<span>上半身平均位移 ${esc(movement)}</span></div><small class="subtle-copy">視線與坐姿是相對校正的估計，不是眼動儀量測；這些未經人工標註驗證的數值不構成表現分數。</small>`;
 }
 
 function reviewPage() {
@@ -1032,24 +1067,18 @@ function startAudioMonitor() {
         const status = document.getElementById("device-mic-signal");
         if (status) status.textContent = state.microphoneHeard ? "已收到聲音；請確認說話時音量表會移動。" : "請說一句話測試；若音量表不動，請換一個輸入裝置。";
       }
-      if (state.recording && !state.waitingForAgent && ["listening", "capturing", "nudge"].includes(interviewTiming.phase)) {
-        if (rms > 0.012) {
-          speechDurationMs += delta;
-          lastVoiceAt = now;
-          if (speechDurationMs >= 180) {
-            if (!state.voiceDetected) {
-              state.voiceDetected = true;
-              interviewTiming.pause("capturing");
-              state.cameraPhase = "candidate_answer";
-              reportCandidateActivity();
-            }
-            interviewTiming.activity();
-          }
-        } else {
-          if (!state.voiceDetected) speechDurationMs = 0;
-          if (state.voiceDetected && now - lastVoiceAt >= 2500) completeVoiceCapture();
+      const listening = state.recording && !state.waitingForAgent && ["listening", "capturing", "nudge"].includes(interviewTiming.phase);
+      // Runs every frame so the noise floor is learned before the answer starts.
+      const transition = voiceActivity.update(rms, now, delta, { listening });
+      if (listening) {
+        if (transition === "start" && !state.voiceDetected) {
+          state.voiceDetected = true;
+          interviewTiming.pause("capturing");
+          state.cameraPhase = "candidate_answer";
+          reportCandidateActivity();
         }
-        if (state.voiceDetected && now - (voiceCapture?.startedAt || now) >= 90000) completeVoiceCapture();
+        if (state.voiceDetected && voiceActivity.smoothed >= voiceActivity.continueThreshold) interviewTiming.activity();
+        if (state.voiceDetected && (transition === "end" || now - (voiceCapture?.startedAt || now) >= MAX_ANSWER_RECORDING_MS)) completeVoiceCapture();
       }
       audioMonitorId = requestAnimationFrame(readLevel);
     };
@@ -1256,7 +1285,17 @@ function sharePage() {
     ${result ? `<section class="share-result"><h3>已送交審核</h3><p>狀態：${esc(result.state)}。核准前不會加入共用檢索。</p><label>心得編號<input readonly value="${esc(result.reportId)}"></label><label>一次性撤回碼<input readonly value="${esc(result.withdrawalCode)}"></label><button class="button button-outline" data-action="copy-withdrawal">複製撤回資訊</button><p>請立即保存撤回碼；離開此頁後不會再次顯示。</p></section>` : ""}</section>${withdrawal}</div>${state.authMessage ? `<p class="form-status">${esc(state.authMessage)}</p>` : ""}`;
 }
 
+// While the student picks a panel or checks devices, open the CLI model
+// connection so the opening question does not pay its 15-25 s first call.
+let agentPrewarmedAt = 0;
+function maybePrewarmAgent() {
+  if (state.agentMode !== "cli" || !["setup", "device"].includes(state.page) || Date.now() - agentPrewarmedAt < 120000) return;
+  agentPrewarmedAt = Date.now();
+  void api("/api/agent/prewarm", { method: "POST", body: "{}" }).catch(() => { agentPrewarmedAt = 0; });
+}
+
 function render() {
+  maybePrewarmAgent();
   if (state.page === "interview") {
     app.innerHTML = interviewPage();
     if (!state.closing) startAudioMonitor();
@@ -1545,7 +1584,7 @@ function discardRecording() {
   state.recorder = null;
   state.recording = false;
   state.voiceDetected = false;
-  speechDurationMs = 0;
+  voiceActivity.reset();
 }
 function startVoiceCapture() {
   if (state.closing || state.finishing || !state.voiceEnabled || state.recording || state.muted || state.voiceRetryRequired || state.waitingForAgent || state.draft.trim() || interviewTiming.phase !== "listening") return;
@@ -1560,8 +1599,7 @@ function startVoiceCapture() {
     state.recorder = recorder;
     state.recording = true;
     state.voiceDetected = false;
-    speechDurationMs = 0;
-    lastAudioSampleAt = 0;
+    voiceActivity.reset();
     recorder.ondataavailable = (event) => { if (!capture.cancelled && event.data?.size) capture.chunks.push(event.data); };
     recorder.onerror = () => {
       if (voiceCapture !== capture) return;
@@ -1591,10 +1629,17 @@ function startVoiceCapture() {
         if (capture.generation !== voiceRequestGeneration || state.sessionId !== capture.sessionId || state.page !== "interview") return;
         state.transcribing = false;
         state.waitingForAgent = false;
-        state.voiceRetryRequired = true;
+        // A recognition miss should not stall the interview: listen again once
+        // by itself, and only then ask for the retry button.
+        const retryKey = `${capture.turnId}:${capture.eventSeq}`;
+        const recognitionMiss = ["TRANSCRIPTION_FAILED", "LOCAL_SPEECH_TIMEOUT", "SPEECH_BUSY", "LOCAL_SPEECH_UNAVAILABLE", "SPEECH_PROVIDER_FAILED"].includes(error.code);
+        const autoRetry = recognitionMiss && state.autoRetriedVoiceTurn !== retryKey;
+        if (autoRetry) state.autoRetriedVoiceTurn = retryKey;
+        state.voiceRetryRequired = !autoRetry;
         interviewTiming.listen();
-        notify(error.message);
+        notify(autoRetry ? "剛才沒有聽清楚，請再說一次；也可以直接打字回答。" : error.message);
         render();
+        if (autoRetry) startVoiceCapture();
       } finally { capture.resolve?.(); }
     };
     recorder.start(1000);
@@ -1636,7 +1681,7 @@ function updateConversationHud() {
   const progress = document.getElementById("silence-progress");
   if (progress) progress.style.width = remaining == null ? "0%" : `${(1 - remaining / interviewTiming.waitMs) * 100}%`;
   const voice = document.getElementById("voice-status-text");
-  if (voice) voice.textContent = status + (state.voiceEnabled && interviewTiming.phase === "listening" && state.recording ? "；直接說話，停頓 2.5 秒後送出" : "");
+  if (voice) voice.textContent = status + (state.voiceEnabled && interviewTiming.phase === "listening" && state.recording ? "；直接說話，停頓約 1.6 秒後送出" : "");
   const level = document.getElementById("microphone-level");
   if (level) level.style.width = `${Math.min(100, microphoneLevel * 700)}%`;
   const mic = app.querySelector('[data-action="mic"] small');

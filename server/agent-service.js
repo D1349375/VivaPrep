@@ -286,4 +286,7 @@ export class AgentService {
   }
 
   release(sessionId) { this.provider.release?.(sessionId); }
+
+  // Opens the next interview's model connection early (CLI only); returns whether one is warming.
+  prewarm() { return Boolean(this.provider.prewarm?.(questionSchema)); }
 }

@@ -9,3 +9,7 @@ Thumbs.db
 /tools/3d/source/*.blend1
 /tools/3d/*.zip
 /送件/
+
+# Local secrets
+.env
+.env.*

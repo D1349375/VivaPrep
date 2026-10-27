@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { InterviewTiming } from "../src/interview-timing.js";
+import { buildPostureFeedback } from "../src/posture-feedback.js";
+import { VoiceActivityDetector } from "../src/voice-activity.js";
 
 // Run the production page controller with isolated Web API doubles; never open a physical microphone.
 let now = 1000;
@@ -41,7 +43,7 @@ class TestAudioContext {
   async close() {}
 }
 const sandbox = vm.createContext({ console, Blob, Buffer, URL, Uint8Array, Uint32Array, Date: TestDate, MediaRecorder: TestRecorder, MediaStream: TestStream, Audio: TestAudio, InterviewTiming: class extends InterviewTiming { constructor() { super(() => now); } },
-  createCameraAnalyzer: () => ({}), percent: (value) => value * 100,
+  createCameraAnalyzer: () => ({}), buildPostureFeedback, VoiceActivityDetector, percent: (value) => value * 100,
   document: { getElementById: (id) => ["app", "toast"].includes(id) ? element : null, querySelector: () => null, body: { classList: element.classList } },
   window: { AudioContext: TestAudioContext, MediaRecorder: TestRecorder, addEventListener() {}, scrollTo() {} },
   navigator: {}, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},

@@ -25,6 +25,9 @@ export class LocalWhisper {
         if (this.child !== child) return;
         this.child = null;
         this.ready = null;
+        // A worker killed after a stuck request reloads right away, so the
+        // student's retry does not also pay the model load time.
+        if (child.loaded && !this.shuttingDown) setTimeout(() => this.initialize().catch(() => {}), 0);
         for (const { reject, timer } of this.pending.values()) { clearTimeout(timer); reject(new AgentError("TRANSCRIPTION_FAILED", "語音辨識中斷，請重試或用文字回答。", 422)); }
         this.pending.clear();
         child.kill();
@@ -38,7 +41,7 @@ export class LocalWhisper {
         if (line.length > 100000) { fail(); return; }
         let message;
         try { message = JSON.parse(line); } catch { return; }
-        if (message.type === "ready") { settled = true; clearTimeout(timer); resolve(); return; }
+        if (message.type === "ready") { settled = true; child.loaded = true; clearTimeout(timer); resolve(); return; }
         if (message.type === "startup_error") { fail(); return; }
         const request = this.pending.get(message.id);
         if (!request) return;
@@ -63,12 +66,12 @@ export class LocalWhisper {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new AgentError("LOCAL_SPEECH_TIMEOUT", "語音辨識逾時，請重試或用文字回答。", 504));
-        this.close();
+        this.child?.kill();
       }, 90000);
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(JSON.stringify({ id, audio: buffer.toString("base64"), vocabulary }) + "\n");
     });
   }
 
-  close() { this.child?.kill(); }
+  close() { this.shuttingDown = true; this.child?.kill(); }
 }
