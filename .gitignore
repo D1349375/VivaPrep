@@ -13,3 +13,6 @@ Thumbs.db
 # Local secrets
 .env
 .env.*
+
+# Office lock files
+~$*
