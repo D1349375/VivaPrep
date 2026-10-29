@@ -8,10 +8,15 @@ import { OpeningPlanner } from "./opening-planner.js";
 import { practiceBudget, topicPolicy, focusAspect } from "./interview-guide.js";
 import { redactSchool, redactSchoolMentions, violatesAnonymity } from "./anonymity.js";
 import { safeSwitchQuestions } from "./panel-coordinator.js";
+import { isLiveRoster } from "./live-voice.js";
 
 const roleBySpeaker = { portfolio: "portfolio", technical: "technical", logic: "motivation" };
 const retryReasonText = "上次候選題重複、太長，或違反匿名規則（提及、猜測或詢問學生就讀的學校）。請離開目前話題線，改問未探索的新重點。";
 const finalSafeQuestion = { candidateQuestion: "時間差不多了，最後請你簡短補充一個剛才還沒談到的重點。", questionFocus: "future_plan" };
+
+// Browser streaming sends answer audio to Google from the student's browser; the consent receipt says so.
+const speechRecognitionLocation = (input) => input?.speechRecognition === "browser" ? "browser-google" : "server";
+const speechConsentVersion = (input, live = false) => live ? "speech-processing-v4" : speechRecognitionLocation(input) === "browser-google" ? "speech-processing-v3" : "speech-processing-v2";
 
 function safeQuestion(roleId, finalQuestion = false) {
   return { ...(finalQuestion ? finalSafeQuestion : safeSwitchQuestions[roleId] || safeSwitchQuestions.portfolio), dialogueAction: "switch_topic", sourceRefs: [] };
@@ -69,6 +74,7 @@ function compactTurns(turns, limit = 4, excludeTurnId = null, answerLimit = 700)
     roleId: turn.roleId,
     questionText: String(turn.questionText || "").slice(0, 260),
     answerText: redactSchool(turn.answerText).slice(-answerLimit),
+    ...(turn.answerFromSpeech ? { answerFromSpeech: true } : {}),
     followUps: (turn.followUps || []).slice(-1).map((text) => String(text).slice(0, 200)),
     questionFocus: turn.questionFocus || null,
   }));
@@ -116,6 +122,7 @@ function completeReviewTurns(turns) {
     roleId: turn.roleId,
     questionText: String(turn.questionText || "").slice(0, 1200),
     answerText: redactSchool(turn.answerText),
+    ...(turn.answerFromSpeech ? { answerFromSpeech: true } : {}),
     followUps: (turn.followUps || []).map((text) => String(text).slice(0, 800)),
   }));
 }
@@ -169,7 +176,8 @@ function splitReviewChunks(turns, assessments, maxPromptDataChars = 14000, maxTu
 }
 
 export class InterviewOrchestrator {
-  constructor({ store, agentService, coordinator, speechAdapter, reportRepository, interviewHistoryRepository, getProfile, config }) {
+  constructor({ store, agentService, coordinator, speechAdapter, reportRepository, interviewHistoryRepository, getProfile, config, liveVoice = null }) {
+    this.liveVoice = liveVoice;
     this.store = store;
     this.agentService = agentService;
     this.coordinator = coordinator;
@@ -211,6 +219,9 @@ export class InterviewOrchestrator {
     if (requestedSave && (!owner.userId || input.consent?.saveHistory !== true)) {
       throw new AgentError("SAVE_HISTORY_CONSENT_REQUIRED", "登入並明確同意保存本場練習後，才能加入個人歷史。", 400);
     }
+    // Gemini Live is used only for the one-examiner warm-up, with model and audio consent plus the Live notice.
+    const live = input.liveVoice === true && voiceEnabled && isLiveRoster(roster) && Boolean(this.liveVoice?.configured)
+      && input.consent?.modelProcessing === true && input.consent?.liveVoice === true;
     const approvedReports = await this.reportRepository.approvedSources();
     const sources = retrieveSources(profile, claims.join(" "), claims, approvedReports, 8);
     const session = {
@@ -243,6 +254,8 @@ export class InterviewOrchestrator {
       consentSnapshot: {
         modelProcessing: input.consent?.modelProcessing === true,
         audioProcessing: input.consent?.audioProcessing === true,
+        speechRecognition: live ? "gemini-live" : speechRecognitionLocation(input.consent),
+        liveVoice: live,
         saveHistory: requestedSave,
         cameraAnalysis: input.cameraAnalysis === true,
         cameraMetricsProcessing: input.consent?.cameraMetricsProcessing === true,
@@ -264,18 +277,29 @@ export class InterviewOrchestrator {
       review: null,
       reviewError: null,
       cameraMetrics: null,
+      live: live ? { state: "pending", model: this.liveVoice.model } : null,
     };
     this.store.create(session);
     if (this.interviewHistoryRepository) {
       try {
         if (input.consent?.modelProcessing === true) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "external_model", granted: true, version: "model-processing-v1" });
-        if (input.consent?.audioProcessing === true) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "speech_processing", granted: true, version: "speech-processing-v2" });
+        if (input.consent?.audioProcessing === true) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "speech_processing", granted: true, version: speechConsentVersion(input.consent, live) });
         if (requestedSave) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "save_history", granted: true, version: "save-history-v1" });
         if (input.consent?.cameraMetricsProcessing === true) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "camera_metrics_processing", granted: true, version: "camera-metrics-processing-v1" });
       } catch (error) {
         this.store.delete(session.id);
         throw error;
       }
+    }
+    if (live) {
+      // Gemini Live speaks the opening itself once the browser connects; until then no question exists.
+      this.openingPlanner ||= new OpeningPlanner();
+      session.openingPlan = this.openingPlanner.choose({ ownerKey: session.ownerUserId || session.guestOwnerHash, profileId: session.profileId, claims: session.claims, eligibleRoles: ["portfolio"] });
+      this.store.emit(session.id, { type: "session.ready", status: "active", mode: this.agentService.mode, speech: speechStatus, live: true });
+      this.store.save(session);
+      const ticket = this.liveVoice.issueTicket(session.id);
+      this.liveVoice.expectAttach(session.id, () => { void this.liveFallback(session.id, { reason: "client_timeout" }); });
+      return { session: this.publicSession(session), event: null, live: { ticket, model: this.liveVoice.model }, agentMode: this.agentService.mode, modelId: this.agentService.modelId, speech: speechStatus };
     }
     let event;
     try {
@@ -312,7 +336,8 @@ export class InterviewOrchestrator {
       if (input.audioProcessing !== true) throw new AgentError("AUDIO_CONSENT_REQUIRED", "啟用語音前需同意音訊處理。", 400);
       if (!this.speechAdapter.status().available) throw new AgentError("SPEECH_UNAVAILABLE", "語音服務尚未準備好。", 503);
       session.consentSnapshot.audioProcessing = true;
-      if (session.ownerUserId && this.interviewHistoryRepository) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "speech_processing", granted: true, version: "speech-processing-v2" });
+      session.consentSnapshot.speechRecognition = speechRecognitionLocation(input);
+      if (session.ownerUserId && this.interviewHistoryRepository) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "speech_processing", granted: true, version: speechConsentVersion(input) });
       session.voiceEnabled = true;
       session.mode = "voice";
     } else if (input.mode === "text") { session.voiceEnabled = false; session.mode = "text"; }
@@ -327,6 +352,8 @@ export class InterviewOrchestrator {
         void this.#generateReview(session);
         continue;
       }
+      // The Live connection did not survive the restart; continue turn-based.
+      if (session.status === "active" && ["pending", "active"].includes(session.live?.state)) { void this.liveFallback(session.id, { reason: "server_restart" }); continue; }
       if (session.status !== "active" || session.phase !== "considering") continue;
       const answeredTurn = session.turns.find((turn) => turn.turnId === session.currentEvent?.turnId);
       if (answeredTurn?.answerText) this.#queueAnswerProcessing(session, answeredTurn);
@@ -354,8 +381,155 @@ export class InterviewOrchestrator {
       agentMode: this.agentService.mode,
       modelId: this.agentService.modelId,
       speech: this.speechAdapter.status(),
+      live: session.live ? { state: session.live.state, model: session.live.model, fallbackReason: session.live.fallbackReason || null } : null,
       sourceRefs: session.sources.map((source) => source.sourceId),
     };
+  }
+
+  attachLive(sessionId, socket) {
+    const session = this.#requireActive(sessionId);
+    if (session.live?.state !== "pending" || !this.liveVoice) throw new AgentError("LIVE_NOT_PENDING", "這場面試沒有等待中的即時對談。", 409);
+    return this.liveVoice.attach(session, socket, this);
+  }
+
+  // Any turn-based action on a Live session ends the Live conversation first.
+  #leaveLive(session, reason, flush) {
+    if (!["pending", "active"].includes(session.live?.state)) return;
+    this.liveVoice?.stop(session.id, { flush });
+    session.live = { ...session.live, state: "ended", endedReason: reason };
+  }
+
+  liveConnected(sessionId, details = {}) {
+    const session = this.store.get(sessionId);
+    if (!session?.live) return;
+    session.live = { ...session.live, state: "active", connectedAt: new Date().toISOString(), model: details.model || session.live.model };
+    this.store.save(session);
+  }
+
+  liveCurrentTurn(sessionId) {
+    const session = this.store.get(sessionId);
+    return session?.turns.find((turn) => turn.turnId === session.currentEvent?.turnId) || null;
+  }
+
+  // A Live question is written once the professor has finished saying it.
+  liveQuestion(sessionId, { text, followUp = false, finalQuestion = false, skippedReason = null }) {
+    const session = this.#requireActive(sessionId);
+    const role = roles.portfolio;
+    const current = session.turns.find((turn) => turn.turnId === session.currentEvent?.turnId);
+    const questionText = String(text || "").trim().slice(0, 1200);
+    let turn = current;
+    if (followUp && current && !current.answerText) current.followUps.push(questionText);
+    else {
+      if (current && !current.answerText && skippedReason) current.skippedReason = skippedReason;
+      const turnId = randomUUID();
+      // Each Live question is its own thread, so a turn-based fallback may follow up on it.
+      turn = { turnId, threadId: turnId, threadDepth: 0, roleId: role.id, speakerId: role.speakerId, questionText, questionFocus: session.turns.length === 0 && session.openingPlan?.id === "introduction" ? "introduction" : null, answerText: "", sourceRefs: [], followUps: [], createdAt: new Date().toISOString(), finalQuestion, live: true };
+      session.turns.push(turn);
+    }
+    const event = this.store.emit(session.id, {
+      type: "interview.event", turnId: turn.turnId, phase: followUp ? "follow_up" : "question", speakerId: role.speakerId, roleId: role.id,
+      utterance: questionText, dialogueAction: followUp ? "rephrase" : session.turns.length === 1 ? "opening" : "live", action: "speaking",
+      topic: role.dimension, durationMs: 0, seed: session.seed, captionsEnabled: session.captionsEnabled, sourceRefs: [], finalQuestion: Boolean(turn.finalQuestion), mode: this.agentService.mode, live: true,
+    });
+    session.currentEvent = event;
+    session.phase = followUp ? "follow_up" : "question";
+    this.store.save(session);
+    return event;
+  }
+
+  liveAnswer(sessionId, { text, fromSpeech = true }) {
+    const session = this.store.get(sessionId);
+    const turn = session && session.turns.find((item) => item.turnId === session.currentEvent?.turnId);
+    const answer = String(text || "").trim().slice(0, this.config.maxAnswerLength);
+    if (!turn || !answer || turn.answerText) return null;
+    turn.answerText = answer;
+    turn.submittedAt = new Date().toISOString();
+    if (fromSpeech) turn.answerFromSpeech = true;
+    const schoolMentions = redactSchoolMentions(answer).count;
+    if (schoolMentions) {
+      session.anonymity ||= { claimMentions: 0, answerMentions: 0 };
+      session.anonymity.answerMentions += schoolMentions;
+      turn.schoolMentionRedacted = true;
+    }
+    this.store.save(session);
+    return { turnId: turn.turnId, schoolMentionRedacted: Boolean(schoolMentions) };
+  }
+
+  liveAnonymityViolation(sessionId) {
+    const session = this.store.get(sessionId);
+    if (!session) return;
+    session.anonymity ||= { claimMentions: 0, answerMentions: 0 };
+    session.anonymity.liveQuestionViolations = (session.anonymity.liveQuestionViolations || 0) + 1;
+    this.store.save(session);
+  }
+
+  liveProgress(sessionId, input) {
+    const session = this.store.get(sessionId);
+    if (session?.status === "active") this.#updateProgress(session, input);
+  }
+
+  liveTiming(sessionId, stage, durationMs, details = {}) {
+    const session = this.store.get(sessionId);
+    if (!session) return;
+    session.timings ||= [];
+    session.timings.push({ stage, durationMs: Math.max(0, Math.round(durationMs)), ...details });
+    if (session.timings.length > 100) session.timings.shift();
+  }
+
+  liveResumed(sessionId, { trigger }) {
+    const session = this.store.get(sessionId);
+    if (!session?.live) return;
+    session.live = { ...session.live, resumptions: (session.live.resumptions || 0) + 1 };
+    this.liveTiming(sessionId, "live_resumed", 0, { trigger });
+    this.store.save(session);
+  }
+
+  liveClosing(sessionId, { text }) {
+    const session = this.store.get(sessionId);
+    if (!session || session.status !== "active") return { event: null, skipped: true };
+    session.live = { ...session.live, state: "ended", endedReason: "completed" };
+    return this.close(sessionId, { reason: practiceBudget(session).remainingSeconds === 0 ? "time" : "completed", liveUtterance: text || "" });
+  }
+
+  // Live is unavailable or dropped: continue at a question boundary with the turn-based Agent.
+  async liveFallback(sessionId, { reason, draftText = "" }) {
+    const session = this.store.get(sessionId);
+    if (!session || session.status !== "active" || !["pending", "active"].includes(session.live?.state)) return;
+    this.liveVoice?.stop(sessionId, { flush: false });
+    session.live = { ...session.live, state: "fallback", fallbackReason: reason, fallbackAt: new Date().toISOString() };
+    this.liveTiming(sessionId, "live_fallback", 0, { reason });
+    this.store.save(session);
+    if (session.stopAfterCurrentAnswer) return;
+    const liveFallback = { reason, draftText: String(draftText || "").slice(0, this.config.maxAnswerLength) };
+    const current = session.turns.find((turn) => turn.turnId === session.currentEvent?.turnId);
+    if (current?.answerText) {
+      // The answer was complete: the Agent asks next from the transcript, on the same topic.
+      this.#queueAnswerProcessing(session, current);
+      return;
+    }
+    if (current) {
+      // The question was already spoken; ask for the answer turn-based without repeating it.
+      const event = this.store.emit(session.id, {
+        type: "interview.event", turnId: current.turnId, phase: current.followUps.length ? "follow_up" : "question", speakerId: current.speakerId, roleId: current.roleId,
+        utterance: current.followUps.at(-1) || current.questionText, dialogueAction: "live_fallback", action: "speaking", topic: roles.portfolio.dimension, durationMs: 0,
+        seed: session.seed, captionsEnabled: session.captionsEnabled, sourceRefs: [], finalQuestion: Boolean(current.finalQuestion), mode: this.agentService.mode, alreadySpoken: true, liveFallback,
+      });
+      session.currentEvent = event;
+      session.phase = "question";
+      this.store.save(session);
+      return;
+    }
+    try {
+      const opening = await this.#askOpening(session);
+      if (session.status !== "active" || this.store.get(session.id) !== session) return;
+      const event = this.store.emit(session.id, { ...opening, liveFallback });
+      session.currentEvent = event;
+      this.store.save(session);
+      void this.#maybeSynthesize(session, event);
+    } catch (error) {
+      if (session.status !== "active") return;
+      this.store.emit(session.id, { type: "error", code: error.code || "AGENT_CALL_FAILED", message: error.message || "考官暫時無法開場，請結束後重新開始。", recoverable: false });
+    }
   }
 
   speechStatus() {
@@ -365,10 +539,12 @@ export class InterviewOrchestrator {
   async submitAnswer(sessionId, input) {
     const session = this.#requireActive(sessionId);
     this.#updateProgress(session, input);
+    this.#leaveLive(session, "turn_based_answer", false);
     const text = String(input?.text || "").trim();
     if (!text || text.length > this.config.maxAnswerLength) throw new AgentError("INVALID_ANSWER", "回答不可空白，且最多 8000 個字元。", 400);
     if (!session.currentEvent) throw new AgentError("NO_CURRENT_QUESTION", "目前沒有等待回答的題目。", 409);
     if (input.turnId && input.turnId !== session.currentEvent.turnId) throw new AgentError("STALE_TURN", "這個回答屬於較早的題目，請回答目前畫面上的問題。", 409);
+    if (input.eventSeq != null && input.eventSeq !== session.currentEvent.seq) throw new AgentError("STALE_TURN", "題目已更新，請回答目前畫面上的問題。", 409);
     const currentTurn = session.turns.find((turn) => turn.turnId === session.currentEvent.turnId);
     if (!currentTurn) throw new AgentError("TURN_NOT_FOUND", "找不到目前的面試回合。", 409);
     if (currentTurn.answerText) {
@@ -379,6 +555,13 @@ export class InterviewOrchestrator {
     currentTurn.answerText = text;
     currentTurn.submittedAt = input.submittedAt || new Date().toISOString();
     currentTurn.clientTurnId = String(input.clientTurnId || "").slice(0, 100) || null;
+    if (["browser-stream", "server-speech"].includes(input.speechInput)) currentTurn.answerFromSpeech = true;
+    // Browser streaming recognition happens before this request; keep its measured delay with the other stage timings.
+    if (input.speechInput === "browser-stream" && Number.isFinite(input.recognitionLatencyMs)) {
+      session.timings ||= [];
+      session.timings.push({ stage: "browser_recognition", durationMs: Math.max(0, Math.round(input.recognitionLatencyMs)), turnId: currentTurn.turnId });
+      if (session.timings.length > 100) session.timings.shift();
+    }
     const schoolMentions = redactSchoolMentions(text).count;
     if (schoolMentions) {
       session.anonymity ||= { claimMentions: 0, answerMentions: 0 };
@@ -415,6 +598,7 @@ export class InterviewOrchestrator {
     const session = this.#requireActive(sessionId);
     this.#updateProgress(session, input);
     if (session.stopAfterCurrentAnswer) return { event: null, skipped: true };
+    this.#leaveLive(session, "turn_based_nudge", false);
     if (practiceBudget(session).remainingSeconds <= 20) return this.close(sessionId, { reason: practiceBudget(session).remainingSeconds === 0 ? "time" : "completed" });
     const current = session.currentEvent;
     if (!current) throw new AgentError("NO_CURRENT_QUESTION", "目前沒有等待回答的題目。", 409);
@@ -516,6 +700,7 @@ export class InterviewOrchestrator {
     if (session.status === "active") {
       if (input.cancel === true) { session.stopAfterCurrentAnswer = false; session.endReason = null; session.phase = "question"; this.store.save(session); return { status: session.status }; }
       this.#updateProgress(session, input);
+      this.#leaveLive(session, "ending", true);
       session.stopAfterCurrentAnswer = true;
       session.endReason = input.reason === "time" ? "time" : "manual";
       session.activityRevision = (session.activityRevision || 0) + 1;
@@ -530,20 +715,23 @@ export class InterviewOrchestrator {
     if (session.status === "closing") return { event: session.currentEvent };
     if (session.status !== "active") return { event: null, skipped: true };
     this.#updateProgress(session, input);
+    this.#leaveLive(session, "closing", true);
     session.stopAfterCurrentAnswer = true;
     session.status = "closing";
     session.phase = "closing";
     session.endReason ||= ["time", "manual", "completed"].includes(input.reason) ? input.reason : "completed";
     this.agentService.release?.(sessionId);
+    // A Live farewell has already been spoken; only the caption is needed.
+    const liveUtterance = String(input.liveUtterance || "").trim().slice(0, 600);
     const event = this.store.emit(session.id, {
       type: "interview.closing", phase: "closing", reason: session.endReason,
       speakerId: session.currentEvent?.speakerId || session.roster[0],
-      utterance: session.endReason === "time" ? "時間到了，我們今天的面試就到這裡。謝謝你的分享，辛苦了。" : "好，我們今天的面試就到這裡。謝謝你的分享，辛苦了。",
-      seed: session.seed, captionsEnabled: true, sourceRefs: [],
+      utterance: liveUtterance || (session.endReason === "time" ? "時間到了，我們今天的面試就到這裡。謝謝你的分享，辛苦了。" : "好，我們今天的面試就到這裡。謝謝你的分享，辛苦了。"),
+      seed: session.seed, captionsEnabled: true, sourceRefs: [], ...(liveUtterance ? { live: true } : {}),
     });
     session.currentEvent = event;
     this.store.save(session);
-    void this.#maybeSynthesize(session, event);
+    if (!liveUtterance) void this.#maybeSynthesize(session, event);
     return { event };
   }
 
@@ -561,6 +749,7 @@ export class InterviewOrchestrator {
       });
       this.store.save(session);
     }
+    this.#leaveLive(session, "finished", true);
     session.status = "reviewing";
     session.stopAfterCurrentAnswer = true;
     this.agentService.release?.(sessionId);
@@ -665,6 +854,7 @@ export class InterviewOrchestrator {
     const session = this.#requireActive(sessionId);
     this.#updateProgress(session, input);
     if (!session.voiceEnabled) throw new AgentError("VOICE_NOT_ENABLED", "此場次沒有啟用語音回答，請改用文字輸入。", 400);
+    this.#leaveLive(session, "turn_based_answer", false);
     const turnId = session.currentEvent?.turnId;
     if (input.turnId && input.turnId !== turnId) throw new AgentError("STALE_TURN", "這段語音屬於較早的題目，請回答目前的問題。", 409);
     if (input.eventSeq != null && input.eventSeq !== session.currentEvent?.seq) throw new AgentError("STALE_TURN", "題目已更新，請重新回答。", 409);
@@ -675,7 +865,7 @@ export class InterviewOrchestrator {
       const started = performance.now();
       const text = await this.speechAdapter.transcribe(audioBuffer, mimeType, { claims: session.claims, question: session.currentEvent?.utterance });
       this.#recordTiming(session, "transcription", started, { turnId });
-      const accepted = await this.submitAnswer(sessionId, { turnId, text, elapsedSeconds: input.elapsedSeconds, submittedAt: new Date().toISOString() });
+      const accepted = await this.submitAnswer(sessionId, { turnId, text, elapsedSeconds: input.elapsedSeconds, submittedAt: new Date().toISOString(), speechInput: "server-speech" });
       return { transcript: text, ...accepted };
     } finally { session.transcribingTurnId = null; }
   }
@@ -687,6 +877,7 @@ export class InterviewOrchestrator {
 
   deleteSession(sessionId) {
     const session = this.#requireSession(sessionId);
+    this.liveVoice?.stop(sessionId, { flush: false });
     this.agentService.release?.(sessionId);
     for (const audio of session.audioBySequence.values()) audio.buffer.fill(0);
     return this.store.delete(sessionId);
@@ -709,7 +900,8 @@ export class InterviewOrchestrator {
     const openingTurnId = randomUUID();
     const started = performance.now();
     this.openingPlanner ||= new OpeningPlanner();
-    const openingPlan = this.openingPlanner.choose({ ownerKey: session.ownerUserId || session.guestOwnerHash, profileId: session.profileId, claims: session.claims, eligibleRoles: eligible.map((role) => role.id) });
+    // A Live session that fell back before its first question keeps the angle it already chose.
+    const openingPlan = session.openingPlan || this.openingPlanner.choose({ ownerKey: session.ownerUserId || session.guestOwnerHash, profileId: session.profileId, claims: session.claims, eligibleRoles: eligible.map((role) => role.id) });
     session.openingPlan = openingPlan;
     const openingRole = eligible.find((role) => role.id === openingPlan.roleId);
     const openingContext = {
@@ -777,6 +969,7 @@ export class InterviewOrchestrator {
       practiceBudget: budget,
       turnId: answeredTurn.turnId,
       answer: redactSchool(answeredTurn.answerText),
+      answerFromSpeech: Boolean(answeredTurn.answerFromSpeech),
       previousQuestion: answeredTurn.questionText,
       previousFocus: answeredTurn.questionFocus,
       claims: session.claims,

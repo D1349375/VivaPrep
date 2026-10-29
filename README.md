@@ -78,9 +78,46 @@ Windows 本機已安裝 Antigravity CLI 時，可用 `npm run dev:agent` 啟動�
 
 匿名保護：備審主張、PDF 摘錄與檔名、學生回答在送給教授與復盤 Agent 前，會把疑似高中／國中校名換成「［學校名稱］」；學生自己的逐字稿保持原文。教授產生的題目若提及、猜測或詢問就讀學校、住處、姓名，會被攔下重新生成，兩次都失敗就改用固定的安全題。回答提到校名時，面試中會提醒「正式面試通常不宜透露就讀學校」，復盤也會註記。校名偵測是規則比對，可能漏掉罕見簡稱或誤遮一般詞；語音模式下，Gemini 語音辨識仍會收到原始音訊。
 
-檢查入口：`node scripts/check-topic-threads.mjs`、`node scripts/check-interview-closing.mjs`、`node scripts/check-input-workflows.mjs`、`node scripts/check-voice-ui.mjs`。真實模型檢查 `node scripts/check-live-closing.mjs` 使用合成文字，涵蓋最後一題、致謝語音與復盤，不開實體麥克風。
+檢查入口：`node scripts/check-topic-threads.mjs`、`node scripts/check-interview-closing.mjs`、`node scripts/check-input-workflows.mjs`、`node scripts/check-voice-ui.mjs`、`node scripts/check-streaming-recognition.mjs`、`node scripts/check-gemini-live-voice.mjs`（假 Live 伺服器：成功對談、連不上、逾時、429、斷線接續、遲到訊息、匿名）、`node scripts/check-gemini-live-ui.mjs`。真實模型檢查 `node scripts/check-live-closing.mjs` 使用合成文字，涵蓋最後一題、致謝語音與復盤，不開實體麥克風。
 
 ## 語音 adapter
+
+### Gemini Live 即時對談（暖身對談，2026-10-28）
+
+「暖身對談」（只有陳教授一位考官）在語音情境下優先使用 Gemini Live API 即時對答：學生說完約 1.2～1.6 秒教授就開口，題目與語音由 Live 直接產生，不經過回合制的辨識 → 教授 Agent → TTS（約 1.6 + 3.5 + 6 秒）。其他考官組合與文字情境維持回合制。
+
+```text
+VIVAPREP_LIVE_VOICE=auto                # auto＝可用就用 Live；off＝一律回合制
+GEMINI_LIVE_VOICE_MODEL=gemini-3.8-live
+GEMINI_LIVE_API_KEY=                    # 留空＝沿用 GEMINI_API_KEY
+```
+
+`ANTIGRAVITY_LIVE_MODEL` 是 CLI 出題用的快速模型，和這裡的 Gemini Live 無關。
+
+- **連線方式：後端代理。**瀏覽器以 WebSocket（`/api/sessions/:id/live?ticket=…`）把麥克風 16 kHz PCM 送到 VivaPrep 後端，後端用伺服器上的 key（`x-goog-api-key` 標頭，不放 URL）連 `BidiGenerateContent`，再把 24 kHz PCM 教授語音回傳給瀏覽器以 Web Audio 播放。選代理而不是臨時權杖讓瀏覽器直連，是因為 key 與系統指示都不會到瀏覽器，後端也能直接讀雙方逐字稿寫入 turns、做匿名檢查並在斷線時接手；代價是多一跳，部署在同一台或同區域時可忽略（本機實測整段延遲 1.2～1.6 秒，其中約 1 秒是 Live 判斷說完的停頓設定）。若日後部署到離使用者很遠的主機，可再評估臨時權杖。WebSocket 不能帶 CSRF 標頭，所以連線需同源 `Origin`、場次擁有者的 cookie，以及建立場次時（CSRF 保護）發的一次性 ticket（60 秒）。
+- **系統指示**沿用教授 Agent 的 `interviewGuide`、`anonymityGuide`、`speechTranscriptGuide`、陳教授角色、開場角度（`OpeningPlanner`）、話題線追問上限與學生確認的備審主張；練習時間由前端每 5 秒回報，進入最後一題區間時以 `clientContent`（`turnComplete: false`，不打斷）提示「下一題用『最後一個問題』」，剩 20 秒提示「說完就致謝」。最後一題回答後 Live 致謝即收尾；若 Live 沒有說出致謝，改用回合制的致謝語音。
+- **逐字稿與復盤：**輸入／輸出語音轉寫（`languageCodes: ["zh-TW","en-US"]` 與少量資工術語，避免轉成簡體）由後端分段：教授說完一句寫成 `questionText`，學生的話在教授下一次開口後寫成 `answerText` 並標 `answerFromSpeech`。停頓 8 秒時請 Live 換個方式問（寫成同題 `followUps`），再沒回應就換話題；學生也可打字作答，文字會送進 Live。括號旁白（例如「(等待學生回答)」）不寫入。復盤照常使用這些 turns。
+- **匿名：**教授說出的問題以 `violatesAnonymity` 檢查，違規的不寫入 turns，並請 Live 說「這題先跳過」改問；回答中的校名照回合制計數、提醒，送給教授與復盤 Agent 前遮蔽。限制：Live 已經聽到原始語音，違規的問題也已經說出口，後端只能事後攔截。
+- **回聲：**教授說話時，瀏覽器只送明顯大聲的人聲（RMS ≥ 0.06，視為插話）到 Live，避免喇叭回聲被當成學生開口；建議戴耳機。
+- **降階（面試不會卡住）：**設備頁會試連一次 Live（`POST /api/live/probe`，逾時 5 秒）；逾時、`429 RESOURCE_EXHAUSTED`、驗證失敗或其他錯誤時，畫面標示「即時對談無法使用，改用回合制」，本場直接走回合制。面試中 Live 斷線或額度用完：先用 `sessionResumption` handle 重新連線（GoAway 或非額度／驗證錯誤，最多 3 次；Live 一個工作階段只允許一個連線，所以會先關舊連線，期間的麥克風音訊最多保留 10 秒再補送），接不上就在題目邊界切回回合制：教授說到一半 → 學生剛才的回答已完整，教授 Agent 依累積逐字稿從同一話題接著問（含 TTS）；學生說到一半 → 已轉出的文字留在作答區，題目不重念；還沒開場 → 教授 Agent 開場。瀏覽器 15 秒內沒有連上 Live、伺服器重啟，或學生改用回合制操作（送出文字 API、錄音辨識）也會切回回合制。舊連線遲到的訊息一律丟棄，不會寫進新題。
+- **授權：**設定頁新增「暖身對談使用 Gemini Live 即時對談」（需同時允許 Agent 與語音），說明音訊會經後端即時送 Google、免費層的內容會被 Google 用來改進產品並可能經人工審閱；Live 是否啟用（模型名稱）納入授權簽章 `preferenceScope()` 的 `live` 欄位。開場送出 `consent.liveVoice`，後端同意紀錄為 `speech-processing-v4`。
+- **頁面隱藏：**教授語音以 Web Audio 排程播放，不使用 `<audio>` 元素，切到別的分頁時不會像回合制那樣延後載入音檔。
+
+實測（2026-10-28，真實 Gemini Live API、示範 Agent、以兩段合成中文錄音當學生）：Chrome 152 正式頁面 8 次「學生說完到教授語音開始播放」1,161～1,592 毫秒（中位數約 1.45 秒）；Node 版手動檢查 9 次「最後一段有聲音訊送出到第一段教授音訊回到後端」1,254～1,683 毫秒；模擬斷線後以 handle 接續 0.83～1.48 秒，接續後教授仍延續原話題；設備頁試連 0.6～1.8 秒。手動檢查：`node scripts/check-live-voice-real.mjs answers.wav`（需 key，不在離線檢查內）。真人說話的停頓、網路與麥克風環境仍會影響數字。
+
+### 瀏覽器串流辨識（預設，2026-10-27）
+
+學生的回答預設由瀏覽器的 Web Speech API（`SpeechRecognition`／`webkitSpeechRecognition`，`zh-TW`、連續、含 interim）即時辨識：說話時作答區直接顯示辨識中的文字（斜體），停頓後把文字經 `POST /api/sessions/:id/answers`（帶 `turnId`、`eventSeq`）送出，不再上傳錄音給後端 Whisper。結束判斷要兩個條件同時成立：麥克風音量安靜 1.6 秒，且 Chrome 1.2 秒內沒有回傳新的 interim 文字（文字會比聲音晚到）；只看其中一個會在說話途中截斷（小聲時音量低於門檻、Chrome 換氣就定稿而下一段字超過 1 秒才回來）。Chrome 重送相同的 interim、或定稿時多補幾個字，都不算還在說話。若音量一直不降（例如途中開了風扇），6 秒沒有新字也會結束。說話期間噪音基準固定為開口前的值，連續說話不會被當成背景噪音。停頓時仍有未定稿文字會先 `stop()` 讓服務定稿，最多等 0.7 秒。單次回答上限從第一個字起算 3 分鐘（錄音退回 Whisper 時仍是 60 秒）。只有雜音、沒有文字時不送出，繼續聽同一題。
+
+辨識準確度：Web Speech API 沒有可用的自訂詞彙，中英混雜的術語常被寫成同音中文（例如 DP → 「一滴」、Python → 「拍放」）。語音回答在後端標記 `answerFromSpeech`，教授 Agent 與復盤 Agent 的指示會說明這是辨識文字，要依上下文推回原意，不追問、不糾正錯字，也不把辨識錯字評為表達問題；逐字稿本身保留原文。
+
+Chrome 的 Web Speech API 會把麥克風音訊送到 Google 語音服務，面試後端只收到文字。設定頁可選「瀏覽器串流辨識（較快，音訊送 Google）」或「本機 Whisper（較慢，不外傳）」，預設串流；辨識位置納入授權簽章，更換後需重新允許語音。開場時送出 `consent.speechRecognition`，後端同意紀錄以 `speech-processing-v3` 記錄串流辨識。
+
+以下情況改走原本的 MediaRecorder → `/audio-answers` → 本機 Whisper，且同一場剩下的題目都用 Whisper：瀏覽器不支援（例如 Firefox）、辨識服務回報 `network`／`not-allowed`／`service-not-allowed`／`audio-capture` 等錯誤、連續兩段說話都沒有辨識結果，或辨識工作階段無法重新開始。錯誤發生時若已辨識到文字，文字會留在作答區讓學生修改後送出；沒有文字則自動改用錄音重新聽同一題，Whisper 辨識失敗仍會先自動再聽一次。`no-speech`（安靜太久）只會重新開始辨識，不算錯誤。教授播放語音、教授思考、收尾期間不收音；換題時中止舊辨識，舊題的結果（包含停頓定稿中才回來的結果）不會送到新題，後端也會以 `eventSeq` 拒絕過期回答。
+
+實測（2026-10-27，Chrome 152、獨立暫存設定檔、以合成中文錄音當假麥克風、示範 Agent）：7 個回答從音量判定說完到送出 1.60～1.62 秒，後端收到 1.63～2.03 秒；同兩段錄音以本機 Whisper small 辨識需 12.4～15.4 秒（不含錄音上傳與停頓判斷）。截斷修正後（2026-10-28，同一套量測）6 個回答中 4 個為 1.60～1.61 秒；停頓時仍有未定稿文字的 1 個為 2.8 秒；另 1 個 4.8 秒發生在電腦記憶體不足卡頓時（後端也延遲到 12.5 秒）。6 個回答都完整收到句尾，沒有截斷。真人說話的實際數字仍以實測為準。前端主控台會記錄每次的「說完到送出」與「最後新字到送出」毫秒數，後端 `timings` 以 `browser_recognition` 階段記錄。內建預覽面板會封鎖麥克風（Web Speech 回報 `not-allowed`），請在 Chrome 開 `http://localhost:4180` 實測；實際延遲仍受網路與真人說話停頓影響。
+
+### 後端語音（Whisper／Gemini／SAPI）
 
 文字面試不依賴 Google API key。要啟用回合制語音辨識和提問語音，需另外設定 Gemini API：
 
@@ -90,9 +127,9 @@ $env:GEMINI_API_KEY = "你的 Google AI Studio API key"
 npm run dev
 ```
 
-設定後，瀏覽器錄音會送至 Gemini Transcribe Files API，完成辨識後會要求刪除暫存檔；教授提問由 Gemini TTS 產生 WAV。這是 STT → 文字教授 Agent → TTS，不是 Live API。沒有設定或使用者未同意時，可直接用文字回答。
+設定後，瀏覽器錄音會送至 Gemini Transcribe Files API，完成辨識後會要求刪除暫存檔；教授提問由 Gemini TTS 產生 WAV。這是 STT → 文字教授 Agent → TTS 的回合制流程；暖身對談的 Gemini Live 見上一節。沒有設定或使用者未同意時，可直接用文字回答。
 
-Windows 也可設定 `VIVAPREP_SPEECH_MODE=windows-sapi` 使用本機語音辨識與合成，不需要 Gemini API key；錄音不會送至語音服務。此版本是回合制語音流程，尚未接入 Gemini Live API。
+Windows 也可設定 `VIVAPREP_SPEECH_MODE=windows-sapi` 使用本機語音辨識與合成，不需要 Gemini API key；錄音不會送至語音服務。這是回合制語音流程，也是 Gemini Live 無法使用時的備援。
 
 只要伺服器設定了 `GEMINI_API_KEY`，教授提問預設改用 Gemini TTS，即使語音辨識仍在本機（`whisper-local` 或 `windows-sapi`）；學生錄音仍留在本機，只有教授的題目文字送到 Google。該場沒有同意 Agent 處理時不送出，改用本機聲音；Gemini 連線或額度失敗時也自動改用本機聲音，不會整段沒聲音。要固定使用本機聲音可設 `VIVAPREP_TTS_MODE=local`。試聽方式：
 
@@ -150,7 +187,8 @@ $env:VIVAPREP_PUBLIC_URL = "https://your-domain.example"
 - `POST /api/portfolio/release`（完成匯入後釋放屬於目前訪客／帳號的 CLI 整理批次）
 - `PATCH /api/sessions/:id/settings`（更新字幕或回答方式；啟用語音需明確同意音訊處理且語音服務可用）
 - `GET /api/sessions/:id/events`（SSE）、`GET /api/sessions/:id/events/:seq/audio`
-- `POST /api/sessions/:id/answers`、`POST /api/sessions/:id/audio-answers`、`POST /api/sessions/:id/nudge`、`POST /api/sessions/:id/finish`、`GET /api/sessions/:id/review`、`POST /api/sessions/:id/review/retry`
+- `POST /api/live/probe`（試連 Gemini Live，不含學生資料）、`GET /api/sessions/:id/live?ticket=…`（WebSocket，暖身對談即時語音；需同源、場次擁有者與一次性 ticket）
+- `POST /api/sessions/:id/answers`（文字或瀏覽器串流辨識的文字；帶 `eventSeq` 時拒絕舊題回答）、`POST /api/sessions/:id/audio-answers`、`POST /api/sessions/:id/nudge`、`POST /api/sessions/:id/finish`、`GET /api/sessions/:id/review`、`POST /api/sessions/:id/review/retry`
 - `GET /api/reports/share-policy`、`POST /api/reports/preview`、`POST /api/reports`、`POST /api/reports/:id/withdraw`
 - `GET /api/admin/reports`、`POST /api/admin/reports/:id/review`、`GET /api/admin/privacy-requests`、`POST /api/admin/privacy-requests/:id/complete`（具相符角色且近期完成 MFA）
 
@@ -164,7 +202,7 @@ Gemini 復盤會分析完整逐字稿與回答：單段最多六回合，或在�
 
 設備檢查頁提供選用的本機鏡頭試測，預覽含頭部與上半身虛線取景提示。勾選後，面試中由 MediaPipe Face/Pose Landmarker 在瀏覽器 Worker 取得臉部特徵點、眼球 blendshape 與上半身特徵點，連到當題 `turnId`、教授與互動階段。開場前約 3 秒為個人校正（坐正、看著考官），之後以校正為基準估計：視線方向（看向考官／低頭／看旁邊／往上看，結合頭部角度與眼球方向，眨眼時不判斷）、坐姿（頭肩下沉、肩膀歪斜）、手部靠近臉部、上半身晃動，以及連續低頭或移開視線的次數與最長秒數。移動電腦或座位後可按「重新校正」。復盤頁的「姿態與視線回饋」只看回答時段：每項給出數值、等級（保持／留意／優先改善）、為什麼重要與一個練習方法，指出最明顯的題目，並以每題的視線分布條呈現；未校正或資料不足時只說明原因，不下判斷。門檻是設計上的經驗值（`src/camera-signals.js`），需用團隊錄製樣本校正。視覺套件與 WASM 由本機伺服器提供；首次載入仍需瀏覽器連線至 Google Storage 取得臉部和姿勢模型檔。原始攝影機影格永不傳到 VivaPrep 伺服器。衍生摘要預設只留在目前頁面；使用者另行同意後，摘要才會送給 Agent 復盤。若同時選擇保存私人歷史，摘要會加密保存並可隨該筆歷史刪除，不會加入共用心得。這些指標尚未以人工標註驗證，視線是相對校正的估計而非眼動儀量測，不構成面試表現評分。檢查：`node scripts/check-camera-feedback.mjs`、`node scripts/check-voice-profiles.mjs --local`。
 
-目前沒有 Gemini Live、Google Drive／Workspace 匯入或 Google Cloud 部署整合。Gemini 教授 Agent 可透過 Gemini API 或 Antigravity CLI 提供回合制文字推論；CLI 模式以 PDF.js 在本機伺服器抽取文字後交給 CLI，API 模式保留 Gemini 原生 PDF 輸入。本機 SAPI、Gemini STT/TTS 和 MediaPipe 是其他可選或已接入的 Google 元件。Drive、Live 和 Cloud 部署仍屬規劃，簡報應依實際完成狀態描述。
+Gemini Live API 目前只用在「暖身對談」的即時語音（其他組合仍為回合制）；尚未有 Google Drive／Workspace 匯入或 Google Cloud 部署整合。Gemini 教授 Agent 可透過 Gemini API 或 Antigravity CLI 提供回合制文字推論；CLI 模式以 PDF.js 在本機伺服器抽取文字後交給 CLI，API 模式保留 Gemini 原生 PDF 輸入。本機 SAPI、Gemini STT/TTS、Chrome Web Speech API（Google 語音服務）和 MediaPipe 是其他可選或已接入的元件。Drive 和 Cloud 部署仍屬規劃，簡報應依實際完成狀態描述。
 
 ## 設計文件
 

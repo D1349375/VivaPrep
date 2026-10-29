@@ -863,6 +863,15 @@ a { color: inherit; text-decoration: none; }
 .permission-settings { padding: 8px 28px; }
 .permission-settings .toggle-row { min-height: 100px; }
 .permission-settings .toggle-row > span { max-width: 78%; }
+.recognition-choice { margin: 0; padding: 14px 0; border: 0; border-bottom: 1px solid #f0eee9; }
+.recognition-choice legend { padding: 0; font-size: 11px; font-weight: 700; }
+.recognition-choice > small { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+.recognition-option { display: flex; align-items: flex-start; gap: 8px; margin-top: 8px; cursor: pointer; }
+.recognition-option input { margin-top: 2px; accent-color: var(--sage); }
+.recognition-option strong, .recognition-option small { display: block; }
+.recognition-option strong { font-size: 11px; }
+.recognition-option small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.answer-composer textarea.is-live-transcript { color: #5d6b60; font-style: italic; }
 .permission-summary { padding: 22px 26px; margin: 20px 0; border: 1px solid var(--line, #ddd5cc); border-radius: 18px; background: #faf7f0; }
 .permission-summary p { font-size: 13px; line-height: 1.8; margin: 10px 0 14px; color: #6b665e; }
 .permission-summary .permission-warning { color: #9b4e32; font-weight: 600; }
@@ -876,3 +885,8 @@ a { color: inherit; text-decoration: none; }
   .settings-shortcut { padding: 8px; }
   .pdf-permission-status { align-items: flex-start; flex-direction: column; }
 }
+/* Gemini Live warm-up status */
+.live-notice { display: inline-flex; align-items: center; padding: 8px 11px; border: 1px solid rgba(255,255,255,.44); border-radius: 6px; color: #fff4e8; background: rgba(169,84,56,.62); backdrop-filter: blur(10px); font-size: 11px; }
+.live-status.is-ok .status-pill { color: #4c6a52; background: var(--sage-pale); }
+.live-status.is-failed .status-pill { color: var(--accent-dark); background: var(--accent-pale); }
+.live-status .text-link { padding: 0; margin-left: 4px; }

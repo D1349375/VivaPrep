@@ -21,7 +21,12 @@ export const config = {
     ? process.env.GEMINI_MODEL || "gemini-3.8-flash"
     : process.env.ANTIGRAVITY_MODEL || "gemini-3.8-flash-medium",
   effort: process.env.ANTIGRAVITY_EFFORT || "medium",
+  // Fast CLI model for question generation; unrelated to Gemini Live voice below.
   liveModelSlug: process.env.ANTIGRAVITY_LIVE_MODEL || "gemini-3.8-flash-low",
+  // Gemini Live real-time voice for the warm-up panel: auto = use when reachable, off = always turn-based.
+  liveVoiceMode: process.env.VIVAPREP_LIVE_VOICE === "off" ? "off" : "auto",
+  liveVoiceModel: process.env.GEMINI_LIVE_VOICE_MODEL || "gemini-3.8-live",
+  liveVoiceApiKey: process.env.GEMINI_LIVE_API_KEY || process.env.GEMINI_API_KEY || "",
   agentTimeoutMs: Number(process.env.VIVAPREP_AGENT_TIMEOUT_MS || 90000),
   speechMode: process.env.VIVAPREP_SPEECH_MODE === "whisper-local"
     ? "whisper-local"

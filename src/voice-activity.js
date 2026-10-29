@@ -36,7 +36,10 @@ export class VoiceActivityDetector {
     while (this.history.length && now - this.history[0][0] > FLOOR_WINDOW_MS) this.history.shift();
     const quietest = this.history.reduce((min, [, level]) => Math.min(min, level), Infinity);
     // Until a second and a half of history exists, assume a quiet room.
-    this.noiseFloor = Math.min(0.05, now - this.history[0][0] < 1500 ? Math.min(DEFAULT_FLOOR, quietest) : quietest);
+    const floor = Math.min(0.05, now - this.history[0][0] < 1500 ? Math.min(DEFAULT_FLOOR, quietest) : quietest);
+    // While someone speaks, keep the floor from before: four seconds of speech
+    // without a gap would otherwise become the "noise" and end the answer mid-sentence.
+    this.noiseFloor = this.speaking ? Math.min(this.noiseFloor, floor) : floor;
     if (!listening) { this.reset(); return null; }
     if (!this.speaking) {
       if (this.smoothed >= this.startThreshold) this.aboveMs += delta;

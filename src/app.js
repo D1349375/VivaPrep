@@ -2,6 +2,7 @@ import { createCameraAnalyzer, percent } from "./camera-analysis.js";
 import { InterviewTiming } from "./interview-timing.js";
 import { buildPostureFeedback } from "./posture-feedback.js";
 import { VoiceActivityDetector } from "./voice-activity.js";
+import { LiveAudioLink } from "./live-audio.js";
 import { PORTFOLIO_PARSER_VERSION, librarySnapshot, readPortfolioLibrary, writePortfolioLibrary, deletePortfolioLibrary, portfolioFileHash } from "./portfolio-library.js";
 
 const app = document.getElementById("app");
@@ -44,9 +45,9 @@ const state = {
   consentModel: false, consentAudio: false, confirmClaims: false, voiceEnabled: false, waitingForAgent: false, sessionStarting: false, nudgePending: false, health: null,
   preferencesReady: false, preferencesKey: "", preferencesMessage: "", settingsReturnPage: "home", closing: false, reviewStarting: false,
   savePortfolio: false, libraryScope: "", libraryReady: false, libraryMessage: "", libraryReturnPage: "home",
-  recorder: null, recordedChunks: [], recording: false, settingsSaving: false,
+  recorder: null, recordedChunks: [], recording: false, settingsSaving: false, recognitionMode: "browser", liveTranscript: "",
   voiceDetected: false, voiceRetryRequired: false, transcribing: false, playbackBlocked: false,
-  finishing: false,
+  finishing: false, liveVoiceConsent: false, liveProbe: { status: "idle", at: 0 }, liveNotice: "", liveCaption: "",
   csrfToken: "", auth: null, authReady: false, authMode: "login", authBusy: false, authMessage: "", authActionUrl: "", authEmail: "",
   account: null, accountHistory: [], accountSessions: [], accountMfa: null, accountLoading: false, selectedHistory: null,
   mfaSecret: "", mfaRecoveryCodes: [], pendingReports: null, pendingPrivacyRequests: null, sharePolicy: null, sharePreview: null, shareResult: null, shareBusy: false,
@@ -67,12 +68,31 @@ let microphoneLevel = 0;
 let voiceRequestGeneration = 0;
 let voiceCapture = null;
 let voiceSubmissionPromise = null;
+// Chrome's Web Speech API streams the answer to Google and returns text while
+// the student talks, so an answer is ready about a second after they stop
+// instead of after a 17-20 s local Whisper pass. Whisper stays the fallback.
+const SpeechRecognitionClass = () => window.SpeechRecognition || window.webkitSpeechRecognition || null;
+// An answer ends only when the microphone has been quiet for 1.6 s and the
+// recognizer has returned no new words for 1.2 s (words lag the audio). Either
+// signal alone cut students off: a soft voice dips under the level threshold,
+// and Chrome finalizes a phrase at every breath, then takes over a second to
+// send the next words.
+const STREAM_PAUSE_MS = 1600;
+const STREAM_WORDS_QUIET_MS = 1200;
+// If the level never drops (a fan starting mid-answer), this long without new words still ends it.
+const STREAM_WORDS_ONLY_END_MS = 6000;
+// No Whisper timeout to protect here, so allow long answers, counted from the first word.
+const MAX_STREAM_ANSWER_MS = 180000;
+// stop() asks the service to finalize pending words; never wait longer than this.
+const STREAM_FLUSH_MS = 700;
+let streamingRecognitionFailure = "";
+const voiceLatencies = [];
 let cameraTrialGeneration = 0;
 const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 const usesExternalAgent = () => state.agentMode === "cli" || state.agentMode === "gemini-api";
 const agentLabel = () => state.agentMode === "gemini-api" ? "Gemini API" : state.agentMode === "cli" ? "Gemini" : state.agentMode === "mock" ? "本機示範" : "服務連線中";
 const portfolioParsingAvailable = () => state.health?.portfolioParsingAvailable === true;
-const preferenceFields = ["consentModel", "consentAudio", "resumeConsent", "confirmClaims", "cameraAnalysisConsent", "cameraMetricsConsent", "saveHistory", "savePortfolio"];
+const preferenceFields = ["consentModel", "consentAudio", "liveVoiceConsent", "resumeConsent", "confirmClaims", "cameraAnalysisConsent", "cameraMetricsConsent", "saveHistory", "savePortfolio"];
 const portfolioScope = () => "portfolio." + (state.auth?.user?.userId || "guest");
 let libraryLoadGeneration = 0;
 async function loadPortfolioLibrary() {
@@ -116,16 +136,30 @@ function selectedPortfolioClaims() {
   const selected = new Set(state.portfolioFiles.filter((item) => item.selected !== false && item.status === "done").map((item) => item.id));
   return state.claims.filter((claim) => !claim.documentId || selected.has(claim.documentId));
 }
+const streamingRecognitionSupported = () => Boolean(SpeechRecognitionClass());
+const usesStreamingRecognition = () => state.recognitionMode === "browser" && streamingRecognitionSupported() && !streamingRecognitionFailure;
+const serverRecognitionLabel = () => state.speechStatus?.processingLocation === "local" ? "本機 Whisper" : "後端語音服務";
+// Gemini Live real-time voice: warm-up panel only, when the server enables it.
+const liveVoiceModel = () => state.health?.liveVoice?.enabled ? state.health.liveVoice.model || "gemini-live" : "off";
+const liveEligible = () => state.panel === "warmup" && state.people.length === 1 && state.people[0] === "portfolio" && state.config.mode === "voice" && liveVoiceModel() !== "off";
+const liveConsented = () => state.liveVoiceConsent && state.consentAudio && state.consentModel;
+const plansLive = () => liveEligible() && liveConsented() && state.liveProbe.status === "ok";
+// Where answer audio is recognized: part of the consent signature, like TTS.
+function recognitionLocation() {
+  return state.recognitionMode === "browser" && streamingRecognitionSupported() ? "browser-google" : state.speechStatus?.processingLocation || "none";
+}
 function preferenceScope() {
-  return JSON.stringify({ version: 1, agent: state.agentMode, audio: state.speechStatus?.provider || "none", location: state.speechStatus?.processingLocation || "none", tts: state.speechStatus?.ttsLocation || "none" });
+  return JSON.stringify({ version: 1, agent: state.agentMode, audio: state.speechStatus?.provider || "none", location: state.speechStatus?.processingLocation || "none", tts: state.speechStatus?.ttsLocation || "none", stt: recognitionLocation(), live: liveVoiceModel() });
 }
 function loadPreferences() {
   const key = "vivaprep.permissions.v1." + (state.auth?.user?.userId || "guest");
   preferenceFields.forEach((field) => { state[field] = false; });
   state.preferencesKey = key;
   state.preferencesMessage = "";
+  state.recognitionMode = "browser";
   try {
     const saved = JSON.parse(window.localStorage?.getItem(key) || "null");
+    if (["browser", "server"].includes(saved?.recognition)) state.recognitionMode = saved.recognition;
     if (saved?.scope === preferenceScope()) {
       preferenceFields.forEach((field) => { state[field] = saved.values?.[field] === true; });
       state.preferencesMessage = "已載入這個瀏覽器先前保存的設定。";
@@ -133,6 +167,7 @@ function loadPreferences() {
     else if (saved) state.preferencesMessage = "資料處理服務已變更，請在設定重新選擇授權。";
   } catch { state.preferencesMessage = "瀏覽器無法讀取設定，請重新選擇授權。"; }
   if (!state.consentModel) { state.resumeConsent = false; state.cameraMetricsConsent = false; }
+  if (!state.consentModel || !state.consentAudio) state.liveVoiceConsent = false;
   if (!state.cameraAnalysisConsent) state.cameraMetricsConsent = false;
   if (!state.auth?.authenticated) state.saveHistory = false;
   state.preferencesReady = true;
@@ -140,7 +175,7 @@ function loadPreferences() {
 function persistPreferences() {
   try {
     if (!window.localStorage) throw new Error("storage unavailable");
-    window.localStorage.setItem(state.preferencesKey || "vivaprep.permissions.v1.guest", JSON.stringify({ scope: preferenceScope(), values: Object.fromEntries(preferenceFields.map((field) => [field, state[field] === true])), updatedAt: new Date().toISOString() }));
+    window.localStorage.setItem(state.preferencesKey || "vivaprep.permissions.v1.guest", JSON.stringify({ scope: preferenceScope(), recognition: state.recognitionMode, values: Object.fromEntries(preferenceFields.map((field) => [field, state[field] === true])), updatedAt: new Date().toISOString() }));
     state.preferencesMessage = "設定已儲存在這個瀏覽器，下次練習會沿用。";
   } catch { state.preferencesMessage = "目前無法保存設定；關閉頁面後需要重新選擇。"; }
 }
@@ -158,11 +193,20 @@ function permissionSummary() {
 function settingsPage() {
   const modelCopy = state.agentMode === "cli" ? "對話、目前編輯的主張與短摘錄會交給 Google Gemini 處理。" : state.agentMode === "gemini-api" ? "對話、目前編輯的主張與短摘錄會交給 Google Gemini API 處理。" : "目前使用本機示範；切換外部模型後會重新確認授權。";
   const ttsCopy = state.speechStatus?.ttsLocation === "cloud" ? "教授提問文字會送 Google Gemini TTS 產生語音；連線失敗時改用本機聲音。" : "";
-  const audioCopy = (state.speechStatus?.processingLocation === "local" ? "錄音送至面試後端進行語音辨識；辨識文字會交給教授 Agent。" : "錄音送交已設定的雲端語音服務辨識，辨識文字交給教授 Agent。") + ttsCopy;
+  const serverCopy = state.speechStatus?.processingLocation === "local" ? "錄音送至面試後端進行語音辨識；辨識文字會交給教授 Agent。" : "錄音送交已設定的雲端語音服務辨識，辨識文字交給教授 Agent。";
+  const audioCopy = (recognitionLocation() === "browser-google" ? `回答時由瀏覽器把音訊即時送 Google 語音服務辨識（Chrome Web Speech API），辨識文字交給教授 Agent；服務無法使用時改由面試後端辨識（${serverRecognitionLabel()}）。` : serverCopy) + ttsCopy;
+  const localLabel = state.speechStatus?.processingLocation === "local" ? "本機 Whisper（較慢，不外傳）" : "後端語音服務（較慢）";
+  const liveCopy = liveVoiceModel() === "off"
+    ? "伺服器目前未啟用即時對談；暖身對談使用回合制。"
+    : `只用於「暖身對談」。面試中麥克風音訊會持續經 VivaPrep 後端即時送到 Google Gemini Live API（${esc(liveVoiceModel())}），由它聽你的回答並直接說出教授的下一句，延遲約 1～2 秒；教授指示含校系情境與你確認的備審主張，雙方逐字稿存入本場紀錄供復盤。使用 Gemini API 免費層時，Google 會用送出的內容（含語音與逐字稿）改進其產品，並可能由人工審閱，請不要說出姓名、就讀學校或其他個人資料。需同時允許 Agent 與語音；連不上、額度用完或中途斷線時自動改用回合制。`;
+  const choice = (value, title, copy, disabled = false) => `<label class="recognition-option"><input type="radio" name="recognitionMode" value="${value}" data-recognition ${state.recognitionMode === value ? "checked" : ""} ${disabled || !state.preferencesReady ? "disabled" : ""} /><span><strong>${title}</strong><small>${copy}</small></span></label>`;
+  const recognitionChoice = `<fieldset class="recognition-choice"><legend>語音辨識位置</legend>${choice("browser", "瀏覽器串流辨識（較快，音訊送 Google）", streamingRecognitionSupported() ? "邊說邊出現文字，停頓後約 1～2 秒送出。" : "此瀏覽器不支援串流辨識（建議使用 Chrome），會改用後端辨識。")}${choice("server", localLabel, "說完後上傳整段錄音辨識，一句話約需 15～20 秒。")}<small>更換辨識位置後，需要重新允許語音辨識。</small></fieldset>`;
   const row = (field, title, copy, disabled = false) => `<label class="toggle-row"><span><strong>${title}</strong><small>${copy}</small></span><input type="checkbox" data-preference="${field}" ${state[field] ? "checked" : ""} ${disabled || !state.preferencesReady ? "disabled" : ""} /><i></i></label>`;
   return `<div class="step-intro"><div class="eyebrow accent">PREFERENCES</div><h1>資料使用設定</h1><p>選擇一次，之後在這個瀏覽器沿用。訪客與不同帳號各自記住偏好；不會保存備審原檔或回答到瀏覽器設定中。你可以隨時關閉授權。</p></div><section class="setting-card permission-settings">
   ${row("consentModel", "允許 Agent 處理練習內容", modelCopy + " 未允許時無法開始 Gemini 面試。")}
+  ${recognitionChoice}
   ${row("consentAudio", "允許語音辨識與教授語音", audioCopy + " 未允許時只能使用文字回答。")}
+  ${row("liveVoiceConsent", "暖身對談使用 Gemini Live 即時對談", liveCopy, liveVoiceModel() === "off" || !state.consentAudio || !state.consentModel)}
   ${row("resumeConsent", "允許整理我選擇的備審 PDF", (state.agentMode === "cli" ? "PDF 送至面試後端，由 Google Gemini 整理成附頁碼的候選主張。" : "PDF 送至 Google Gemini API 整理。") + " 每次按整理才會傳送；需同時允許 Agent。未允許時可手動編輯主張。", !state.consentModel)}
   ${row("confirmClaims", "允許面試使用目前編輯的備審主張", "開始前請回查主張、檔名、頁碼與摘錄。啟用後使用當時畫面中的主張；關閉後只練習校系與通用問題。")}
   ${row("savePortfolio", "在此瀏覽器保存備審資料庫", "只保存檔名、主張、頁碼與短摘錄，不保存原始 PDF。下次可直接選用；訪客與帳號分開保存，不會同步其他裝置。共用電腦不建議啟用。關閉後會刪除已保存的資料。")}
@@ -417,6 +461,8 @@ function acceptInterviewEvent(event) {
   if (event.type === "interview.closing") {
     showInterviewClosing(event);
   } else if (event.type === "interview.event") {
+    if (event.live && liveLink) { acceptLiveQuestion(event); return; }
+    if (liveLink) leaveLiveMode(event.liveFallback ? "即時對談中斷，改用回合制繼續。" : "");
     if (state.finishing || state.closing) return;
     stopQuestionAudio();
     discardRecording();
@@ -436,10 +482,13 @@ function acceptInterviewEvent(event) {
       const turn = state.backendTurns.find((item) => item.turnId === event.turnId);
       if (turn && !turn.followUps.includes(event.utterance)) turn.followUps.push(event.utterance);
     }
+    // Words recognized before Live dropped stay in the answer box.
+    if (event.liveFallback?.draftText && !state.draft.trim()) state.draft = event.liveFallback.draftText;
     prepareQuestion(event);
     if (state.page === "interview") render();
     if (event.audioUrl && state.voiceEnabled) playAudio(event.audioUrl, event.seq);
   } else if (event.type === "answer.received") {
+    if (liveLink) leaveLiveMode("即時對談中斷，教授改用回合制接著問。");
     stopQuestionAudio();
     discardRecording();
     interviewTiming.pause("thinking");
@@ -497,8 +546,10 @@ function prepareQuestion(event) {
   audioPlayedSequence = null;
   candidateActivitySequence = null;
   state.voiceRetryRequired = false;
-  interviewTiming.question(event, state.voiceEnabled);
-  if (state.voiceEnabled) {
+  // A question Live already said is not synthesized again.
+  const spoken = Boolean(event.alreadySpoken || event.live);
+  interviewTiming.question(event, state.voiceEnabled && !spoken);
+  if (state.voiceEnabled && !spoken) {
     audioPreparationTimer = setTimeout(() => {
       if (state.currentEvent?.seq !== event.seq || interviewTiming.phase !== "preparing") return;
       audioPlayedSequence = event.seq;
@@ -558,6 +609,9 @@ async function tryQuestionPlayback(audio = questionAudio, sequence = state.curre
 
 function showInterviewClosing(event) {
   if (state.page !== "interview" || state.currentEvent?.type === "interview.closing") return;
+  // A Live farewell was already received; let its audio finish before the review.
+  if (liveLink) leaveLiveMode("", { drain: Boolean(event.live) });
+  const liveFarewellMs = event.live ? Math.max(0, liveDrainUntil - Date.now()) : 0;
   stopQuestionAudio(); discardRecording(); stopAudioMonitor();
   state.closing = true; state.finishing = true; state.confirmEnd = false;
   state.currentEvent = event; state.followUp = ""; state.draft = "";
@@ -568,7 +622,7 @@ function showInterviewClosing(event) {
   render();
   // Wait for speech readiness. The visible courtesy text remains usable if TTS fails.
   clearTimeout(closingTimer);
-  closingTimer = setTimeout(() => { void completeInterviewReview(); }, state.voiceEnabled ? 10000 : 2800);
+  closingTimer = setTimeout(() => { void completeInterviewReview(); }, event.live ? liveFarewellMs + 1200 : state.voiceEnabled ? 10000 : 2800);
   if (event.audioUrl && state.voiceEnabled) playClosingAudio(event.audioUrl, event.seq);
 }
 function playClosingAudio(url, sequence) {
@@ -709,7 +763,163 @@ function stopCameraTrial() {
   if (state.page === "interview") notify("鏡頭試測已停止，鏡頭畫面已關閉。");
 }
 
+let liveLink = null;
+let liveProbePromise = null;
+let liveDrainUntil = 0;
+const liveVoiceActivity = new VoiceActivityDetector();
+let liveVoiceAt = 0;
+let liveProfessorTurn = false;
+let liveNudges = 0;
+let liveNudgeTimer = null;
+// After the student stops, Live replies in about 1-3 s; until then it is not the student's turn.
+let liveAwaitingReply = false;
+let liveReplyTimer = null;
+// One short Live connection on the device page; a failure keeps this session turn-based until "再試一次".
+function maybeProbeLive(force = false) {
+  if (liveProbePromise) return liveProbePromise;
+  if (!liveEligible() || !liveConsented()) return null;
+  const probe = state.liveProbe;
+  if (!force && !(probe.status === "idle" || (probe.status === "ok" && Date.now() - probe.at > 60000))) return null;
+  state.liveProbe = { status: "checking", at: Date.now() };
+  liveProbePromise = api("/api/live/probe", { method: "POST", body: "{}" })
+    .then((result) => { state.liveProbe = result.available ? { status: "ok", at: Date.now(), latencyMs: result.latencyMs } : { status: "failed", at: Date.now(), reason: result.reason, message: result.message }; })
+    .catch((error) => { state.liveProbe = { status: "failed", at: Date.now(), reason: "unavailable", message: error.message }; })
+    .finally(() => { liveProbePromise = null; if (state.page === "device" && !state.sessionStarting) render(); });
+  return liveProbePromise;
+}
+async function startLiveConversation(ticket) {
+  const sessionId = state.sessionId;
+  const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/api/sessions/" + encodeURIComponent(sessionId) + "/live?ticket=" + encodeURIComponent(ticket);
+  liveVoiceActivity.reset(); liveVoiceAt = 0; liveProfessorTurn = false; liveNudges = 0;
+  const link = new LiveAudioLink({
+    url, stream: state.stream,
+    onMessage: (message) => { if (liveLink === link) onLiveMessage(message); },
+    onClose: () => { if (liveLink === link) leaveLiveMode("即時對談連線中斷，改用回合制繼續。"); },
+    onPlaybackStart: (startsAt) => { if (liveLink === link) onLivePlaybackStart(startsAt); },
+    onPlaybackIdle: () => { if (liveLink === link) onLivePlaybackIdle(); },
+    onChunk: (rms, now, playing) => { if (liveLink === link) onLiveChunk(rms, now, playing); },
+  });
+  liveLink = link;
+  try { await link.start(); }
+  catch (error) {
+    // The server sees the closed socket and continues turn-based.
+    if (liveLink === link) leaveLiveMode(error.message + " 改用回合制繼續。");
+  }
+}
+function leaveLiveMode(message = "", { drain = false, rerender = true } = {}) {
+  const link = liveLink;
+  if (!link) return;
+  liveLink = null;
+  liveDrainUntil = drain ? Date.now() + link.remainingPlaybackMs() : 0;
+  clearTimeout(liveNudgeTimer);
+  clearTimeout(liveReplyTimer);
+  liveAwaitingReply = false;
+  link.close({ drain });
+  state.nudgePending = false;
+  state.liveCaption = "";
+  liveVoiceActivity.reset();
+  if (message) { state.liveNotice = "已改用回合制"; notify(message); }
+  if (state.page !== "interview") return;
+  if (!state.closing && !state.finishing && ["speaking", "preparing", "capturing", "nudge"].includes(interviewTiming.phase)) interviewTiming.pause("thinking");
+  if (rerender) render();
+}
+function liveListen() {
+  if (state.closing || state.finishing || !liveLink) return;
+  interviewTiming.listen();
+  state.cameraPhase = "question_response_transition";
+  updateConversationHud();
+}
+function acceptLiveQuestion(event) {
+  if (state.finishing || state.closing) return;
+  state.currentEvent = event;
+  state.waitingForAgent = false;
+  state.nudgePending = false;
+  clearTimeout(liveNudgeTimer);
+  state.followUp = event.phase === "follow_up" ? event.utterance : "";
+  state.liveCaption = "";
+  if (event.phase !== "follow_up") liveNudges = 0;
+  const turnIndex = state.backendTurns.findIndex((turn) => turn.turnId === event.turnId);
+  if (turnIndex >= 0) state.q = turnIndex;
+  else {
+    state.backendTurns.push({ turnId: event.turnId, roleId: event.roleId, speakerId: event.speakerId, questionText: event.utterance, answerText: "", followUps: [] });
+    state.q = state.backendTurns.length - 1;
+  }
+  if (event.phase === "follow_up") {
+    const turn = state.backendTurns.find((item) => item.turnId === event.turnId);
+    if (turn && !turn.followUps.includes(event.utterance)) turn.followUps.push(event.utterance);
+  }
+  interviewTiming.question(event, true);
+  if (liveLink.audioQueued) interviewTiming.pause("speaking"); else liveListen();
+  if (state.page === "interview") render();
+}
+function onLiveMessage(message) {
+  if (message.type === "ready") { state.liveNotice = ""; render(); }
+  else if (message.type === "output") {
+    liveProfessorTurn = true;
+    state.liveCaption = message.text;
+    const caption = app.querySelector(".caption-bubble p");
+    if (caption) caption.textContent = message.text;
+  } else if (message.type === "input") showLiveTranscript(message.text);
+  else if (message.type === "turn") {
+    liveProfessorTurn = message.speaker === "professor";
+    liveAwaitingReply = false;
+    clearTimeout(liveReplyTimer);
+    if (liveProfessorTurn) {
+      clearTimeout(liveNudgeTimer);
+      state.nudgePending = false;
+      clearLiveTranscript();
+      if (interviewTiming.phase !== "speaking") interviewTiming.pause("thinking");
+    } else if (!liveLink.audioQueued) liveListen();
+    updateConversationHud();
+  } else if (message.type === "interrupted") liveLink.flush();
+  else if (message.type === "anonymity") notify(message.message);
+  else if (message.type === "fallback") {
+    if (message.draftText && !state.draft.trim()) state.draft = message.draftText;
+    leaveLiveMode(message.message || "即時對談中斷，改用回合制繼續。");
+  } else if (message.type === "ended") leaveLiveMode("", { drain: true });
+  else if (message.type === "resumed") console.info("[VivaPrep] Gemini Live 已重新連線");
+}
+// Measured from the last moment the student's voice was above speech level to
+// when the professor's first audio actually starts playing.
+function onLivePlaybackStart(startsAt) {
+  if (liveVoiceAt) {
+    const ms = Math.max(0, Math.round(startsAt - liveVoiceAt));
+    liveVoiceAt = 0;
+    liveLink.send({ type: "latency", ms });
+    voiceLatencies.push({ liveResponseMs: ms });
+    if (voiceLatencies.length > 20) voiceLatencies.shift();
+    console.info(`[VivaPrep] Gemini Live：說完到教授開口 ${ms} ms`);
+  }
+  interviewTiming.pause("speaking");
+  state.cameraPhase = "question_listening";
+  updateConversationHud();
+}
+function onLivePlaybackIdle() {
+  if (state.closing) return;
+  // Audio arrives faster than real time; a gap mid-turn is not the end of the question.
+  if (liveProfessorTurn) interviewTiming.pause("thinking");
+  else liveListen();
+  updateConversationHud();
+}
+function onLiveChunk(rms, now, playing) {
+  microphoneLevel = rms;
+  const listening = !playing && !liveProfessorTurn && (liveAwaitingReply || ["listening", "capturing", "nudge"].includes(interviewTiming.phase));
+  const transition = liveVoiceActivity.update(rms, now, 100, { listening });
+  if (!listening) return;
+  if (transition === "start") { liveAwaitingReply = false; clearTimeout(liveReplyTimer); interviewTiming.pause("capturing"); state.cameraPhase = "candidate_answer"; reportCandidateActivity(); updateConversationHud(); }
+  // The raw chunk level, not the smoothed one, so the end of speech is not reported late.
+  if (liveVoiceActivity.speaking && rms >= liveVoiceActivity.continueThreshold) { liveVoiceAt = now; interviewTiming.activity(); }
+  if (transition === "end") {
+    // Speaking again keeps the answer going; no reply within 6 s hands the turn back.
+    liveAwaitingReply = true;
+    interviewTiming.pause("thinking");
+    clearTimeout(liveReplyTimer);
+    liveReplyTimer = setTimeout(() => { if (liveAwaitingReply && !liveProfessorTurn) { liveAwaitingReply = false; liveListen(); } }, 6000);
+    updateConversationHud();
+  }
+}
 function stopMedia() {
+  if (liveLink) leaveLiveMode("", { rerender: false });
   clearTimeout(closingTimer);
   interviewTiming.pause("ended");
   stopQuestionAudio();
@@ -868,21 +1078,33 @@ function devicePage() {
     : state.agentMode === "cli"
       ? "Gemini 教授 Agent 會收到確認主張和面試對話"
       : "本機示範 Agent 不會外傳對話";
-  const speechDisclosure = localSpeech
-    ? state.speechStatus?.ttsLocation === "cloud" ? "錄音送至面試後端進行語音辨識，教授提問文字送 Google Gemini TTS 朗讀" : "錄音送至面試後端進行語音辨識，教授提問以本機語音朗讀"
-    : state.speechStatus?.provider === "gemini"
-      ? "錄音會送至 Google 語音服務辨識，教授提問由雲端合成"
-      : "語音服務尚未啟用；可改用文字回答";
+  const recognitionDisclosure = usesStreamingRecognition()
+    ? `回答語音由瀏覽器即時送 Google 語音服務辨識（無法使用時改用${serverRecognitionLabel()}）`
+    : localSpeech ? "錄音送至面試後端進行語音辨識" : "錄音會送至 Google 語音服務辨識";
+  const ttsDisclosure = localSpeech ? (state.speechStatus?.ttsLocation === "cloud" ? "教授提問文字送 Google Gemini TTS 朗讀" : "教授提問以本機語音朗讀") : "教授提問由雲端合成";
+  const speechDisclosure = localSpeech || state.speechStatus?.provider === "gemini" ? `${recognitionDisclosure}，${ttsDisclosure}` : "語音服務尚未啟用；可改用文字回答";
   const pdfEvidenceDisclosure = usesExternalAgent() && state.claims.some((claim) => claim.sourcePage || claim.evidenceQuote)
     ? "；若使用 PDF 抽取主張，已確認主張的檔名、頁碼與短摘錄也會一併傳送"
     : "";
-  const processingCopy = `${agentDisclosure}${pdfEvidenceDisclosure}；${speechDisclosure}。原始鏡頭畫面不會上傳。`;
+  const liveDisclosure = liveEligible() && liveConsented() && state.liveProbe.status !== "failed"
+    ? "；暖身對談使用 Gemini Live：麥克風音訊經面試後端即時送 Google Gemini Live API，教授語音也由它產生（免費層的內容會被 Google 用來改進產品），連不上時改用上述回合制"
+    : "";
+  const processingCopy = `${agentDisclosure}${pdfEvidenceDisclosure}；${speechDisclosure}${liveDisclosure}。原始鏡頭畫面不會上傳。`;
   return intro(3, "先確認設備，再進入面試室", `回答會送到面試後端加密暫存；${state.saveHistory ? "本場已選擇保存到登入帳號，預計保留 24 個月，可在帳號頁匯出或刪除。" : "本場預設不保存為個人歷史，結束後依暫存期限清除。"}${processingCopy}`) +
   `<div class="device-grid"><section class="device-preview-card"><div class="device-preview-top"><span class="eyebrow">CAMERA PREVIEW</span><span class="local-only">◈ 僅此裝置</span></div><div class="video-preview ${state.deviceReady ? "has-video" : ""}"><video id="device-video" autoplay playsinline muted></video><div class="camera-framing-guide" aria-hidden="true"><span class="camera-framing-head"></span><span class="camera-framing-upper-body"></span><small>頭部與雙肩保持在框內</small></div><div class="preview-placeholder"><span class="camera-orbit">◉</span><strong>${state.deviceReady ? "鏡頭已準備好" : "鏡頭預覽尚未開啟"}</strong><small>${state.deviceReady ? "離開此頁後會停止鏡頭" : "按下檢查按鈕後，瀏覽器會詢問鏡頭權限"}</small></div><span class="preview-corner">設備檢查</span></div><button class="button button-primary full-button" data-action="camera-device">${state.deviceReady ? "重新檢查鏡頭" : "開啟鏡頭預覽（選用）"} <span>→</span></button>${state.cameraError ? `<p class="pdf-parse-message is-error">${esc(state.cameraError)}</p>` : ""}<button class="skip-check" data-action="skip-devices">略過設備檢查，以文字方式繼續</button></section>
-  <section class="device-status-card"><span class="eyebrow">DEVICE STATUS</span><h3>設備與資料使用</h3>${microphoneControlsHtml()}<div class="device-status-row"><span class="device-symbol">▣</span><span><strong>攝影機</strong><small>預設不分析；啟用後只在本機即時估算</small></span><span class="status-pill">選用</span></div>
+  <section class="device-status-card"><span class="eyebrow">DEVICE STATUS</span><h3>設備與資料使用</h3>${microphoneControlsHtml()}${liveStatusHtml()}<div class="device-status-row"><span class="device-symbol">▣</span><span><strong>攝影機</strong><small>預設不分析；啟用後只在本機即時估算</small></span><span class="status-pill">選用</span></div>
   ${permissionSummary()}
   <div class="device-info-note"><span>i</span><p>${state.agentMode === "gemini-api" ? (state.health?.geminiApiConfigured ? `教授與復盤使用 ${esc(state.health.model || "Gemini API")}。` : "Gemini API key 尚未設定；面試與 PDF 解析目前無法呼叫模型。") : state.agentMode === "cli" ? "教授與復盤使用 Google Gemini。" : "目前使用本機示範 Agent。"}${localSpeech ? "繁中語音辨識與教授語音已就緒。" : state.speechStatus?.provider === "gemini" ? "語音服務使用 Gemini API。" : "語音辨識／合成未啟用時仍可使用文字回答。"}</p></div><div class="device-profile-summary"><span class="mini-school-mark">F</span><div><strong>${profile().school}・${profile().dept}</strong><small>${activePeople().map((x) => x.name).join("・")} ・ ${state.config.duration} 分鐘</small></div><button data-action="step" data-page="setup">編輯</button></div></section></div>
   <div class="form-footer"><button class="button button-quiet" data-action="step" data-page="setup" ${state.sessionStarting ? "disabled" : ""}>← 返回設定</button><button class="button button-primary" data-action="step" data-page="interview" ${state.sessionStarting ? "disabled aria-busy=\"true\"" : startRestriction() ? "disabled" : ""}>${state.sessionStarting ? "正在準備面試室…" : "進入面試室"} ${state.sessionStarting ? "" : "<span>→</span>"}</button></div>`;
+}
+function liveStatusHtml() {
+  if (!liveEligible()) return "";
+  const probe = state.liveProbe;
+  const [pill, copy] = !liveConsented() ? ["回合制", "未允許即時對談，暖身對談使用回合制；可到資料使用設定開啟。"]
+    : probe.status === "ok" ? ["即時", `已試連 Gemini Live（${probe.latencyMs} ms），暖身對談會即時對答。`]
+    : probe.status === "failed" ? ["回合制", `即時對談無法使用，改用回合制（${probe.message || "連線失敗"}）。`]
+    : ["試連中", "正在試連 Gemini Live…"];
+  return `<div class="device-status-row live-status is-${probe.status}" role="status"><span class="device-symbol">◎</span><span><strong>即時對談</strong><small>${esc(copy)}${probe.status === "failed" && liveConsented() ? ' <button class="text-link" data-action="live-probe">再試一次</button>' : ""}</small></span><span class="status-pill">${pill}</span></div>`;
 }
 function actor(person, index, total, event) {
   const seats = total === 1 ? [50] : total === 2 ? [23, 77] : [23, 50, 77];
@@ -900,7 +1122,7 @@ function interviewPage() {
   const event = { speaker: state.currentEvent?.speakerId || people[0]?.id || "portfolio", reader: state.currentEvent?.readerId || "", turn: state.q, seed: Number(state.seed) || 0 };
   const speaker = interviewers[event.speaker] || interviewers[people[0]?.id] || interviewers.portfolio;
   const timer = '<span class="interview-timer' + (state.remaining <= 60 ? " is-urgent" : "") + '"><span id="practice-timer-label">練習倒數</span><strong id="remaining-time">' + remainingText() + "</strong></span>";
-  const captionText = state.followUp || q.text;
+  const captionText = state.liveCaption || state.followUp || q.text;
   const caption = state.config.captions || state.closing ? '<div class="caption-bubble" aria-live="polite"><span class="caption-speaker">' + speaker.name + (state.followUp ? "・追問" : "") + "</span><p>" + esc(captionText) + "</p></div>" : "";
   const progressCount = Math.max(state.backendTurns.length, 1);
   const stageNotice = state.closing ? "面試收尾" : state.currentEvent?.finalQuestion ? "最後一個問題・回答後結束" : state.remaining <= closingWindowSeconds() ? "即將結束・請簡短完成目前回答" : "";
@@ -908,10 +1130,10 @@ function interviewPage() {
   const modal = state.confirmEnd ? '<div class="modal-scrim"><div class="confirm-modal" role="dialog" aria-modal="true"><span class="modal-icon">↗</span><h2>要結束這次練習嗎？</h2><p>已提交的回答會用於這次復盤；面試結束後會移除本機記憶體中的場次。</p><div><button class="button button-quiet" data-action="continue">繼續練習</button><button class="button button-primary" data-action="confirm-end">結束並看復盤</button></div></div></div>' : "";
   return `<main class="interview-screen">
   <header class="interview-topline"><a class="interview-brand" href="#" data-action="home"><span class="brand-mark">V</span><span><strong>VivaPrep</strong><small>模擬面試</small></span></a><div class="interview-context"><span class="context-dot"></span><span>${p.school}・${p.dept}</span><i>·</i><span>${p.route}</span><b>示範情境</b></div><div class="interview-top-actions">${timer}<button class="exit-link" data-action="end" ${state.finishing ? "disabled" : ""}>結束面試 <span>↗</span></button></div></header>
-  <div class="room-caption-top"><span class="room-status"><i></i> ${usesExternalAgent() ? `${esc(agentLabel())} 教授 Agent` : "本機示範 Agent"}</span><span class="room-phase">${stageNotice || q.topic}　·　${String(state.q + 1).padStart(2, "0")} / ${Math.max(state.backendTurns.length, 1)}</span><div class="silence-meter"><div><span>停頓時考官會接話</span><strong id="silence-value">08 秒</strong></div><span class="silence-track"><i id="silence-progress"></i></span></div></div>
+  <div class="room-caption-top"><span class="room-status"><i></i> ${liveLink ? "Gemini Live 即時對談" : usesExternalAgent() ? `${esc(agentLabel())} 教授 Agent` : "本機示範 Agent"}</span>${state.liveNotice ? `<span class="live-notice" role="status">${esc(state.liveNotice)}</span>` : ""}<span class="room-phase">${stageNotice || q.topic}　·　${String(state.q + 1).padStart(2, "0")} / ${Math.max(state.backendTurns.length, 1)}</span><div class="silence-meter"><div><span>停頓時考官會接話</span><strong id="silence-value">08 秒</strong></div><span class="silence-track"><i id="silence-progress"></i></span></div></div>
   <section class="room-stage" data-count="${people.length}" aria-label="平面面試室；教授會依談話狀態切換圖片"><div class="room-backdrop" aria-hidden="true"></div><div class="room-wash" aria-hidden="true"></div>${people.map((x, i) => actor(x, i, people.length, event)).join("")}<div class="room-desk-front" aria-hidden="true"></div><div class="speaker-cue ${state.followUp ? "is-follow-up" : ""}"><span class="cue-pulse"></span><span><small>${state.closing ? "面試收尾" : state.followUp ? (usesExternalAgent() ? "教授自然接話" : "本機示範追問") : "目前發問"}</small><strong>${speaker.name}・${speaker.role}</strong></span><span class="cue-chevron">›</span></div></section>
-  <div class="interview-bottom">${caption}<div class="voice-status" role="status"><span id="voice-status-text">${state.voiceEnabled ? "教授說完後可直接回答" : "閱讀題目後輸入回答"}</span>${state.voiceEnabled ? '<span class="microphone-level-track" aria-label="麥克風音量"><i id="microphone-level"></i></span>' : ""}${state.closing ? `<button data-action="closing-review">閱讀後看復盤 →</button>${state.playbackBlocked ? '<button data-action="play-question">播放收尾</button>' : ""}` : state.playbackBlocked ? '<button data-action="play-question">播放問題</button><button data-action="skip-question-audio">閱讀字幕回答</button>' : ""}</div>${state.closing ? "" : interviewMicrophoneHtml()}<form class="answer-composer" data-form="answer"><div class="composer-context"><span class="composer-wave">${state.config.mode === "voice" ? "♩" : "⌁"}</span><span>${state.config.mode === "voice" ? "語音情境" : "文字練習"}<small>${state.voiceEnabled ? (state.speechStatus?.processingLocation === "local" ? "語音在本機辨識" : "語音送交辨識服務") : "回答以文字送交教授"}</small></span></div><textarea name="answer" rows="2" ${state.waitingForAgent ? "disabled" : ""} placeholder="${state.voiceEnabled ? "教授說完後直接說話，或在這裡輸入回答…" : "輸入你的回答，考官會依節奏繼續…"}" aria-label="輸入模擬回答">${esc(state.draft)}</textarea><button class="send-answer" ${state.waitingForAgent ? "disabled" : ""} type="submit" aria-label="送出回答，讓面試繼續">↑</button></form></div>
-  <footer class="interview-dock"><div class="dock-group"><button class="dock-control ${state.muted ? "is-muted" : ""}" data-action="mic" ${state.finishing ? "disabled" : ""}><span>${state.muted ? "×" : "♩"}</span><small>${!state.voiceEnabled ? "啟用語音回答" : !state.audioReady ? "連接麥克風" : state.voiceRetryRequired ? "重試收音" : state.muted ? "開啟麥克風" : "暫停麥克風"}</small></button>${state.voiceEnabled ? '<button class="dock-control" data-action="send-voice" disabled><span>↑</span><small>說完了，送出</small></button>' : ""}<div class="dock-control is-camera" aria-label="鏡頭預覽已隱藏"><span>▣</span><small>鏡頭預覽已隱藏</small></div><button class="dock-control ${state.config.captions ? "is-on" : ""}" data-action="captions" ${state.settingsSaving || state.closing ? "disabled aria-busy=\"true\"" : ""}><span>CC</span><small>字幕 ${state.config.captions ? "開啟" : "關閉"}</small></button></div><div class="dock-center"><span class="question-progress">${progress}</span><span>${String(state.q + 1).padStart(2, "0")} / ${String(Math.max(state.backendTurns.length, 1)).padStart(2, "0")} 題</span></div><div class="dock-right"><span class="seed-badge">SEED ${esc(state.seed)}</span><span class="dock-hint">${state.closing ? "面試結束，稍後整理復盤" : state.voiceEnabled ? "直接回答，停頓後自動送出" : "送出回答後，考官自然接續"}</span></div></footer>${modal}</main>`;
+  <div class="interview-bottom">${caption}<div class="voice-status" role="status"><span id="voice-status-text">${state.voiceEnabled ? "教授說完後可直接回答" : "閱讀題目後輸入回答"}</span>${state.voiceEnabled ? '<span class="microphone-level-track" aria-label="麥克風音量"><i id="microphone-level"></i></span>' : ""}${state.closing ? `<button data-action="closing-review">閱讀後看復盤 →</button>${state.playbackBlocked ? '<button data-action="play-question">播放收尾</button>' : ""}` : state.playbackBlocked ? '<button data-action="play-question">播放問題</button><button data-action="skip-question-audio">閱讀字幕回答</button>' : ""}</div>${state.closing ? "" : interviewMicrophoneHtml()}<form class="answer-composer" data-form="answer"><div class="composer-context"><span class="composer-wave">${state.config.mode === "voice" ? "♩" : "⌁"}</span><span>${state.config.mode === "voice" ? "語音情境" : "文字練習"}<small>${state.voiceEnabled ? (liveLink ? "Gemini Live 即時對談" : usesStreamingRecognition() ? "瀏覽器串流辨識" : state.speechStatus?.processingLocation === "local" ? "語音在本機辨識" : "語音送交辨識服務") : "回答以文字送交教授"}</small></span></div><textarea name="answer" rows="2" class="${!state.draft && state.liveTranscript ? "is-live-transcript" : ""}" ${state.waitingForAgent ? "disabled" : ""} placeholder="${state.voiceEnabled ? "教授說完後直接說話，或在這裡輸入回答…" : "輸入你的回答，考官會依節奏繼續…"}" aria-label="輸入模擬回答">${esc(state.draft || state.liveTranscript)}</textarea><button class="send-answer" ${state.waitingForAgent ? "disabled" : ""} type="submit" aria-label="送出回答，讓面試繼續">↑</button></form></div>
+  <footer class="interview-dock"><div class="dock-group"><button class="dock-control ${state.muted ? "is-muted" : ""}" data-action="mic" ${state.finishing ? "disabled" : ""}><span>${state.muted ? "×" : "♩"}</span><small>${!state.voiceEnabled ? "啟用語音回答" : !state.audioReady ? "連接麥克風" : state.voiceRetryRequired ? "重試收音" : state.muted ? "開啟麥克風" : "暫停麥克風"}</small></button>${state.voiceEnabled ? '<button class="dock-control" data-action="send-voice" disabled><span>↑</span><small>說完了，送出</small></button>' : ""}<div class="dock-control is-camera" aria-label="鏡頭預覽已隱藏"><span>▣</span><small>鏡頭預覽已隱藏</small></div><button class="dock-control ${state.config.captions ? "is-on" : ""}" data-action="captions" ${state.settingsSaving || state.closing ? "disabled aria-busy=\"true\"" : ""}><span>CC</span><small>字幕 ${state.config.captions ? "開啟" : "關閉"}</small></button></div><div class="dock-center"><span class="question-progress">${progress}</span><span>${String(state.q + 1).padStart(2, "0")} / ${String(Math.max(state.backendTurns.length, 1)).padStart(2, "0")} 題</span></div><div class="dock-right"><span class="seed-badge">SEED ${esc(state.seed)}</span><span class="dock-hint">${state.closing ? "面試結束，稍後整理復盤" : liveLink ? "直接說話，教授即時接話" : state.voiceEnabled ? "直接回答，停頓後自動送出" : "送出回答後，考官自然接續"}</span></div></footer>${modal}</main>`;
 }
 function cameraTrialReviewCard() {
   const summary = state.cameraAnalysisSummary;
@@ -1071,14 +1293,13 @@ function startAudioMonitor() {
       // Runs every frame so the noise floor is learned before the answer starts.
       const transition = voiceActivity.update(rms, now, delta, { listening });
       if (listening) {
-        if (transition === "start" && !state.voiceDetected) {
-          state.voiceDetected = true;
-          interviewTiming.pause("capturing");
-          state.cameraPhase = "candidate_answer";
-          reportCandidateActivity();
+        if (transition === "start" && !state.voiceDetected) markVoiceStart();
+        if (state.voiceDetected && voiceActivity.smoothed >= voiceActivity.continueThreshold) {
+          interviewTiming.activity();
+          if (voiceCapture) voiceCapture.lastVoiceAt = now;
         }
-        if (state.voiceDetected && voiceActivity.smoothed >= voiceActivity.continueThreshold) interviewTiming.activity();
-        if (state.voiceDetected && (transition === "end" || now - (voiceCapture?.startedAt || now) >= MAX_ANSWER_RECORDING_MS)) completeVoiceCapture();
+        if (voiceCapture?.kind === "stream") { if (state.voiceDetected && transition === "end") scheduleStreamEnd(voiceCapture); }
+        else if (state.voiceDetected && (transition === "end" || now - (voiceCapture?.startedAt || now) >= MAX_ANSWER_RECORDING_MS)) completeVoiceCapture();
       }
       audioMonitorId = requestAnimationFrame(readLevel);
     };
@@ -1094,6 +1315,18 @@ function armSilencePrompt() {
 }
 function triggerFollowUp() {
   if (state.finishing || state.closing || !state.sessionId || state.waitingForAgent || state.nudgePending || state.voiceDetected || silenceRemainingMs() !== 0) return;
+  if (liveLink) {
+    // Live rephrases once, then changes topic, like the turn-based professor.
+    if (liveNudges >= 2 || liveProfessorTurn || liveLink.playing) return;
+    liveNudges += 1;
+    state.nudgePending = true;
+    interviewTiming.pause("nudge");
+    liveLink.send({ type: "nudge" });
+    clearTimeout(liveNudgeTimer);
+    liveNudgeTimer = setTimeout(() => { if (state.nudgePending && liveLink) { state.nudgePending = false; liveListen(); } }, 8000);
+    updateConversationHud();
+    return;
+  }
   const sessionId = state.sessionId;
   const turnId = state.currentEvent?.turnId;
   const eventSeq = state.currentEvent?.seq;
@@ -1120,6 +1353,8 @@ function triggerFollowUp() {
 async function finishInterview(reason = "manual") {
   if (!state.sessionId || state.page !== "interview" || state.finishing) return;
   state.finishing = true;
+  // The backend keeps the words Live already heard for this answer.
+  if (liveLink) leaveLiveMode("", { rerender: false });
   state.confirmEnd = false;
   state.endReason = reason;
   const hadPendingVoice = (state.voiceDetected && state.recording) || state.transcribing;
@@ -1296,6 +1531,7 @@ function maybePrewarmAgent() {
 
 function render() {
   maybePrewarmAgent();
+  if (state.page === "device") maybeProbeLive();
   if (state.page === "interview") {
     app.innerHTML = interviewPage();
     if (!state.closing) startAudioMonitor();
@@ -1303,6 +1539,7 @@ function render() {
       if (!interviewTiming.countsTowardPractice() || state.confirmEnd || state.finishing) return;
       state.elapsed++;
       state.remaining = Math.max(0, Number(state.config.duration) * 60 - state.elapsed);
+      if (liveLink && state.elapsed % 5 === 0) liveLink.send({ type: "progress", elapsedSeconds: state.elapsed });
       if (state.elapsed % 15 === 0 || state.remaining === closingWindowSeconds()) {
         void api("/api/sessions/" + encodeURIComponent(state.sessionId) + "/progress", { method: "POST", body: JSON.stringify({ elapsedSeconds: state.elapsed }) }).catch(() => {});
       }
@@ -1342,6 +1579,8 @@ async function startInterview() {
       if (!state.stream?.getAudioTracks().some((track) => track.readyState === "live")) await acquireMicrophone();
       if (!state.audioReady) return;
     }
+    // The device-page probe decides Live for this session; wait if it is still running.
+    if (liveEligible() && liveConsented()) await maybeProbeLive();
     stopAudioMonitor();
     if (state.stream) {
       if (!state.cameraAnalysisConsent) state.stream.getVideoTracks().forEach((track) => track.stop());
@@ -1360,6 +1599,7 @@ async function startInterview() {
     }
     stopEventStream();
     if (state.sessionId) await api("/api/sessions/" + encodeURIComponent(state.sessionId), { method: "DELETE" }).catch(() => {});
+    streamingRecognitionFailure = "";
     const result = await api("/api/sessions", {
       method: "POST",
       body: JSON.stringify({
@@ -1373,7 +1613,8 @@ async function startInterview() {
         confirmedClaims: state.confirmClaims ? selectedPortfolioClaims().map((claim) => ({ text: claim.text, sourcePage: claim.sourcePage, evidenceQuote: claim.evidenceQuote, claimType: claim.claimType, confidence: claim.confidence, documentId: claim.documentId, sourceFilename: claim.sourceFilename })) : [],
         retentionMode: state.saveHistory ? "saved" : "ephemeral",
         cameraAnalysis: state.cameraAnalysisConsent,
-        consent: { modelProcessing: state.consentModel, audioProcessing: state.consentAudio, saveHistory: state.saveHistory, cameraMetricsProcessing: state.cameraMetricsConsent },
+        liveVoice: plansLive(),
+        consent: { modelProcessing: state.consentModel, audioProcessing: state.consentAudio, liveVoice: plansLive(), speechRecognition: usesStreamingRecognition() ? "browser" : "server", saveHistory: state.saveHistory, cameraMetricsProcessing: state.cameraMetricsConsent },
       }),
     });
     state.sessionId = result.session.sessionId;
@@ -1385,14 +1626,19 @@ async function startInterview() {
     state.page = "interview"; state.q = 0; state.answers = []; state.backendTurns = [];
     state.cameraAnalysisSummary = null;
     state.cameraPhase = "question_visible_window";
-    state.backendTurns.push({ turnId: result.event.turnId, roleId: result.event.roleId, speakerId: result.event.speakerId, questionText: result.event.utterance, answerText: "", followUps: [] });
+    if (result.event) state.backendTurns.push({ turnId: result.event.turnId, roleId: result.event.roleId, speakerId: result.event.speakerId, questionText: result.event.utterance, answerText: "", followUps: [] });
     state.followUps = []; state.followUp = ""; state.draft = ""; state.endReason = "";
     state.review = null; state.reviewError = null; state.elapsed = 0; state.remaining = Number(state.config.duration) * 60; state.muted = false; state.confirmEnd = false; state.waitingForAgent = false;
     state.closing = false; state.finishing = false; state.reviewStarting = false; clearTimeout(closingTimer);
-    prepareQuestion(result.event);
+    state.liveCaption = "";
+    state.liveNotice = liveEligible() && liveConsented() && !result.live ? "即時對談無法使用，改用回合制" : "";
+    // Live speaks its own opening once the socket connects; no Agent question exists yet.
+    if (result.live) interviewTiming.pause("preparing");
+    else prepareQuestion(result.event);
     connectEventStream();
     render();
-    if (result.event.audioUrl && state.voiceEnabled) playAudio(result.event.audioUrl, result.event.seq);
+    if (result.live) void startLiveConversation(result.live.ticket);
+    else if (result.event.audioUrl && state.voiceEnabled) playAudio(result.event.audioUrl, result.event.seq);
     if (state.cameraAnalysisConsent) void startCameraTrial();
   } catch (error) {
     state.waitingForAgent = false;
@@ -1410,6 +1656,16 @@ async function submitAnswer() {
   const answer = input?.value.trim() || state.draft.trim();
   if (!answer) { notify("先輸入一段回答，再讓教授繼續提問。"); input?.focus(); return; }
   if (!state.sessionId || state.waitingForAgent) return false;
+  if (liveLink) {
+    if (!liveLink.send({ type: "text", text: answer })) { notify("即時對談連線中斷，請稍候改用回合制。"); return false; }
+    state.draft = "";
+    if (input) input.value = "";
+    clearLiveTranscript();
+    interviewTiming.pause("thinking");
+    notify("已送出文字回答：" + answer.slice(0, 45));
+    render();
+    return true;
+  }
   const turn = state.backendTurns.find((item) => item.turnId === state.currentEvent?.turnId);
   if (!turn || turn.answerText) { notify("教授正在準備下一題，請稍候。"); return false; }
   stopQuestionAudio();
@@ -1535,7 +1791,7 @@ async function toggleMic() {
     try {
       await acquireMicrophone();
       if (!state.audioReady) return;
-      const result = await api("/api/sessions/" + encodeURIComponent(state.sessionId) + "/settings", { method: "PATCH", body: JSON.stringify({ mode: "voice", audioProcessing: true }) });
+      const result = await api("/api/sessions/" + encodeURIComponent(state.sessionId) + "/settings", { method: "PATCH", body: JSON.stringify({ mode: "voice", audioProcessing: true, speechRecognition: usesStreamingRecognition() ? "browser" : "server" }) });
       state.voiceEnabled = Boolean(result.session.voiceEnabled);
       state.config.mode = result.session.mode;
       state.voiceRetryRequired = false;
@@ -1578,18 +1834,221 @@ function reportCandidateActivity() {
   }).catch(() => {});
 }
 function discardRecording() {
-  if (voiceCapture) { voiceCapture.cancelled = true; voiceCapture.resolve?.(); voiceCapture.chunks.length = 0; }
+  if (voiceCapture) {
+    voiceCapture.cancelled = true; voiceCapture.resolve?.(); voiceCapture.chunks.length = 0;
+    if (voiceCapture.kind === "stream") { clearTimeout(voiceCapture.timer); try { voiceCapture.recognition.abort(); } catch { /* Already stopped. */ } }
+  }
   if (state.recorder && state.recorder.state !== "inactive") state.recorder.stop();
   voiceCapture = null;
   state.recorder = null;
   state.recording = false;
   state.voiceDetected = false;
   voiceActivity.reset();
+  clearLiveTranscript();
+}
+function markVoiceStart() {
+  if (voiceCapture && !voiceCapture.speechStartedAt) voiceCapture.speechStartedAt = Date.now();
+  state.voiceDetected = true;
+  interviewTiming.pause("capturing");
+  state.cameraPhase = "candidate_answer";
+  reportCandidateActivity();
+}
+// Interim words go into the answer box without becoming a typed draft, so
+// typing over them takes the answer over as text.
+function showLiveTranscript(text) {
+  state.liveTranscript = text;
+  const input = app.querySelector('[data-form="answer"] textarea');
+  if (!input || state.draft.trim()) return;
+  input.value = text;
+  input.classList?.toggle("is-live-transcript", Boolean(text));
+}
+function clearLiveTranscript() {
+  const input = app.querySelector('[data-form="answer"] textarea');
+  if (input && state.liveTranscript && input.value === state.liveTranscript) input.value = "";
+  input?.classList?.remove("is-live-transcript");
+  state.liveTranscript = "";
+}
+// The same question listens once more by itself before asking for the retry button.
+function resumeAfterVoiceMiss(capture, retryable, message) {
+  const retryKey = `${capture.turnId}:${capture.eventSeq}`;
+  const autoRetry = retryable && state.autoRetriedVoiceTurn !== retryKey;
+  if (autoRetry) state.autoRetriedVoiceTurn = retryKey;
+  state.voiceRetryRequired = !autoRetry;
+  interviewTiming.listen();
+  notify(autoRetry ? "剛才沒有聽清楚，請再說一次；也可以直接打字回答。" : message);
+  render();
+  if (autoRetry) startVoiceCapture();
+}
+const streamText = (capture) => (capture.committed + capture.final + capture.interim).trim();
+function startRecognitionSession(capture) {
+  capture.sessionStartedAt = Date.now();
+  // Newer Chrome accepts the selected microphone track; older versions ignore it and use the default input.
+  try { capture.recognition.start(capture.track); return true; }
+  catch { try { capture.recognition.start(); return true; } catch { return false; } }
+}
+function startStreamingCapture(tracks) {
+  const Recognition = SpeechRecognitionClass();
+  const capture = { kind: "stream", sessionId: state.sessionId, turnId: state.currentEvent.turnId, eventSeq: state.currentEvent.seq, startedAt: Date.now(), track: tracks[0], chunks: [], generation: voiceRequestGeneration, cancelled: false, submit: false, finished: false, committed: "", final: "", interim: "", lastResultAt: 0, lastVoiceAt: 0, lastWordsAt: 0, speechStartedAt: 0, wordlessSpeech: 0, quickEnds: 0, timer: null };
+  try {
+    capture.recognition = new Recognition();
+    Object.assign(capture.recognition, { lang: "zh-TW", continuous: true, interimResults: true, maxAlternatives: 1 });
+  } catch { streamingRecognitionFailure = "unavailable"; return false; }
+  capture.recognition.onresult = (event) => onStreamResult(capture, event);
+  capture.recognition.onerror = (event) => onStreamError(capture, event.error);
+  capture.recognition.onend = () => onStreamEnd(capture);
+  voiceCapture = capture;
+  if (!startRecognitionSession(capture)) { voiceCapture = null; streamingRecognitionFailure = "start-failed"; return false; }
+  state.recording = true;
+  state.voiceDetected = false;
+  voiceActivity.reset();
+  startAudioMonitor();
+  return true;
+}
+function onStreamResult(capture, event) {
+  if (voiceCapture !== capture || capture.cancelled || capture.finished) return;
+  let final = "", interim = "";
+  for (let index = 0; index < event.results.length; index++) {
+    const result = event.results[index];
+    if (result.isFinal) final += result[0]?.transcript || ""; else interim += result[0]?.transcript || "";
+  }
+  const previous = streamText(capture);
+  const previousInterim = capture.interim;
+  Object.assign(capture, { final, interim });
+  const text = streamText(capture);
+  showLiveTranscript(text);
+  if (!text) return;
+  if (capture.submit) { if (!interim) void finishStreamingCapture(capture); return; }
+  capture.lastResultAt = Date.now();
+  // Changed pending words mean the student is still talking. A phrase being finalized
+  // (even with a few more characters) does not, nor does Chrome resending the same interim.
+  if ((interim && interim !== previousInterim) || !previous) capture.lastWordsAt = capture.lastResultAt;
+  if (!state.voiceDetected) markVoiceStart();
+  interviewTiming.activity();
+  scheduleStreamEnd(capture);
+}
+function scheduleStreamEnd(capture) {
+  clearTimeout(capture.timer);
+  if (voiceCapture !== capture || capture.submit || !state.voiceDetected) return;
+  const now = Date.now();
+  const longAnswer = capture.speechStartedAt && now - capture.speechStartedAt >= MAX_STREAM_ANSWER_MS;
+  const wordsQuiet = now - capture.lastWordsAt;
+  const wait = Math.min(Math.max(STREAM_PAUSE_MS - (now - capture.lastVoiceAt), STREAM_WORDS_QUIET_MS - wordsQuiet), STREAM_WORDS_ONLY_END_MS - wordsQuiet);
+  if (wait > 0 && !longAnswer) { capture.timer = setTimeout(() => scheduleStreamEnd(capture), wait); return; }
+  completeVoiceCapture();
+}
+function onStreamError(capture, code) {
+  if (voiceCapture !== capture || capture.cancelled || capture.finished) return;
+  // Chrome reports silence as no-speech and then ends; onend listens again.
+  if (code === "no-speech" || code === "aborted") return;
+  if (capture.submit) { void finishStreamingCapture(capture); return; }
+  fallBackToRecorder(capture, code || "error");
+}
+function onStreamEnd(capture) {
+  if (voiceCapture !== capture || capture.cancelled || capture.finished) return;
+  if (capture.submit) { void finishStreamingCapture(capture); return; }
+  // Chrome closes a recognition session after silence or about a minute; keep listening on the same question.
+  capture.committed = streamText(capture);
+  capture.final = ""; capture.interim = "";
+  capture.quickEnds = Date.now() - capture.sessionStartedAt < 1000 ? capture.quickEnds + 1 : 0;
+  if (capture.quickEnds >= 3 || !startRecognitionSession(capture)) fallBackToRecorder(capture, "ended");
+}
+// network, not-allowed, service-not-allowed and the like: Whisper takes over for the rest of the interview.
+function fallBackToRecorder(capture, reason) {
+  streamingRecognitionFailure = reason;
+  const text = streamText(capture);
+  discardRecording();
+  if (interviewTiming.phase === "capturing") interviewTiming.listen();
+  if (text) {
+    state.draft = text;
+    notify(`瀏覽器串流辨識中斷，已保留辨識到的文字，可修改後送出；之後改用${serverRecognitionLabel()}。`);
+    render();
+    return;
+  }
+  notify(`瀏覽器串流辨識無法使用（${reason}），改用${serverRecognitionLabel()}，請再說一次。`);
+  render();
+  startVoiceCapture();
+}
+function completeStreamingCapture(capture) {
+  if (!streamText(capture)) {
+    // Noise without words is not an answer; keep listening on this question.
+    state.voiceDetected = false;
+    voiceActivity.reset();
+    if (interviewTiming.phase === "capturing") interviewTiming.listen();
+    if (++capture.wordlessSpeech >= 2) fallBackToRecorder(capture, "no-result");
+    else updateConversationHud();
+    return voiceSubmissionPromise;
+  }
+  capture.submit = true;
+  capture.stopRequestedAt = Date.now();
+  voiceSubmissionPromise = new Promise((resolve) => { capture.resolve = resolve; });
+  state.transcribing = true;
+  state.waitingForAgent = true;
+  interviewTiming.pause("transcribing");
+  state.cameraPhase = "agent_transition";
+  clearTimeout(capture.timer);
+  if (capture.interim) {
+    try { capture.recognition.stop(); } catch { /* finish below */ }
+    capture.timer = setTimeout(() => void finishStreamingCapture(capture), STREAM_FLUSH_MS);
+  } else void finishStreamingCapture(capture);
+  render();
+  updateConversationHud();
+  return voiceSubmissionPromise;
+}
+async function finishStreamingCapture(capture) {
+  if (capture.finished) return;
+  capture.finished = true;
+  clearTimeout(capture.timer);
+  try { capture.recognition.abort(); } catch { /* Already stopped. */ }
+  if (voiceCapture === capture) voiceCapture = null;
+  state.recording = false;
+  state.voiceDetected = false;
+  const text = streamText(capture);
+  const sameSession = () => capture.generation === voiceRequestGeneration && state.sessionId === capture.sessionId && state.page === "interview";
+  try {
+    // A result that belongs to an older question is dropped, never sent to the new one.
+    if (capture.cancelled || !sameSession() || state.currentEvent?.seq !== capture.eventSeq || state.currentEvent?.turnId !== capture.turnId) return;
+    if (!text) {
+      state.transcribing = false; state.waitingForAgent = false;
+      resumeAfterVoiceMiss(capture, true, "沒有辨識到文字，請按「重試收音」或改用文字回答。");
+      return;
+    }
+    const sentAt = Date.now();
+    // The microphone level shows when speech stopped; result times lag it, so they are only the fallback.
+    const speechEndedAt = capture.lastVoiceAt || capture.lastResultAt || capture.stopRequestedAt;
+    const latency = { speechToSendMs: sentAt - speechEndedAt, wordsToSendMs: sentAt - capture.lastWordsAt, flushMs: sentAt - capture.stopRequestedAt };
+    await api("/api/sessions/" + encodeURIComponent(capture.sessionId) + "/answers", {
+      method: "POST",
+      body: JSON.stringify({ clientTurnId: window.crypto?.randomUUID?.() || String(sentAt), turnId: capture.turnId, eventSeq: capture.eventSeq, text, elapsedSeconds: state.elapsed, submittedAt: new Date(sentAt).toISOString(), speechInput: "browser-stream", recognitionLatencyMs: latency.speechToSendMs }),
+    });
+    latency.acceptedMs = Date.now() - speechEndedAt;
+    voiceLatencies.push(latency);
+    if (voiceLatencies.length > 20) voiceLatencies.shift();
+    console.info(`[VivaPrep] 串流辨識：說完到送出 ${latency.speechToSendMs} ms，後端收到 ${latency.acceptedMs} ms（最後新字到送出 ${latency.wordsToSendMs} ms，收尾 ${latency.flushMs} ms）`);
+    if (!sameSession()) return;
+    const turn = state.backendTurns.find((item) => item.turnId === capture.turnId);
+    if (turn) turn.answerText = text;
+    state.transcribing = false;
+    clearLiveTranscript();
+    notify("已收到語音回答：" + text.slice(0, 45));
+    render();
+  } catch (error) {
+    if (!sameSession()) return;
+    state.transcribing = false;
+    state.waitingForAgent = false;
+    clearLiveTranscript();
+    if (error.code === "STALE_TURN") { render(); return; }
+    // Keep the recognized words so the answer can be sent again as text.
+    state.draft = text;
+    interviewTiming.listen();
+    notify(error.message);
+    render();
+  } finally { capture.resolve?.(); }
 }
 function startVoiceCapture() {
-  if (state.closing || state.finishing || !state.voiceEnabled || state.recording || state.muted || state.voiceRetryRequired || state.waitingForAgent || state.draft.trim() || interviewTiming.phase !== "listening") return;
+  if (liveLink || state.closing || state.finishing || !state.voiceEnabled || state.recording || state.muted || state.voiceRetryRequired || state.waitingForAgent || state.draft.trim() || interviewTiming.phase !== "listening") return;
   const tracks = state.stream?.getAudioTracks().filter((track) => track.readyState === "live" && track.enabled) || [];
   if (!tracks.length) { state.audioReady = false; return; }
+  if (usesStreamingRecognition() && startStreamingCapture(tracks)) return;
   if (!window.MediaRecorder) { state.voiceRetryRequired = true; notify("瀏覽器無法錄音，請改用文字回答。"); return; }
   const mimeType = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
   try {
@@ -1629,17 +2088,9 @@ function startVoiceCapture() {
         if (capture.generation !== voiceRequestGeneration || state.sessionId !== capture.sessionId || state.page !== "interview") return;
         state.transcribing = false;
         state.waitingForAgent = false;
-        // A recognition miss should not stall the interview: listen again once
-        // by itself, and only then ask for the retry button.
-        const retryKey = `${capture.turnId}:${capture.eventSeq}`;
+        // A recognition miss should not stall the interview.
         const recognitionMiss = ["TRANSCRIPTION_FAILED", "LOCAL_SPEECH_TIMEOUT", "SPEECH_BUSY", "LOCAL_SPEECH_UNAVAILABLE", "SPEECH_PROVIDER_FAILED"].includes(error.code);
-        const autoRetry = recognitionMiss && state.autoRetriedVoiceTurn !== retryKey;
-        if (autoRetry) state.autoRetriedVoiceTurn = retryKey;
-        state.voiceRetryRequired = !autoRetry;
-        interviewTiming.listen();
-        notify(autoRetry ? "剛才沒有聽清楚，請再說一次；也可以直接打字回答。" : error.message);
-        render();
-        if (autoRetry) startVoiceCapture();
+        resumeAfterVoiceMiss(capture, recognitionMiss, error.message);
       } finally { capture.resolve?.(); }
     };
     recorder.start(1000);
@@ -1650,7 +2101,9 @@ function startVoiceCapture() {
   }
 }
 function completeVoiceCapture() {
-  if (!voiceCapture || !state.recorder || voiceCapture.submit || !state.voiceDetected) return voiceSubmissionPromise;
+  if (!voiceCapture || voiceCapture.submit || !state.voiceDetected) return voiceSubmissionPromise;
+  if (voiceCapture.kind === "stream") return completeStreamingCapture(voiceCapture);
+  if (!state.recorder) return voiceSubmissionPromise;
   voiceCapture.submit = true;
   voiceSubmissionPromise = new Promise((resolve) => { voiceCapture.resolve = resolve; });
   state.transcribing = true;
@@ -1673,7 +2126,8 @@ function updateConversationHud() {
   if(practiceLabel) practiceLabel.textContent=state.closing ? "面試收尾" : interviewTiming.countsTowardPractice()?"練習倒數":"等待中・計時暫停";
   if (state.page !== "interview") return;
   const remaining = silenceRemainingMs();
-  const labels = { preparing: "準備語音", speaking: "教授說話中", playback_blocked: "請播放問題", capturing: "正在收音", transcribing: "語音辨識中", thinking: "考官思考中", nudge: "考官接話中" };
+  const streaming = voiceCapture?.kind === "stream" || (state.transcribing && usesStreamingRecognition());
+  const labels = { preparing: liveLink ? "連線即時對談" : "準備語音", speaking: "教授說話中", playback_blocked: "請播放問題", capturing: streaming ? "即時辨識中" : "正在收音", transcribing: streaming ? "送出回答中" : "語音辨識中", thinking: "考官思考中", nudge: "考官接話中" };
   const microphoneUnavailable = state.voiceEnabled && !["preparing", "speaking", "playback_blocked", "thinking", "transcribing", "nudge"].includes(interviewTiming.phase);
   const status = state.closing ? (state.playbackBlocked ? "播放收尾，或閱讀後前往復盤" : "教授收尾中，稍後整理復盤") : microphoneUnavailable && !state.audioReady ? "請連接麥克風" : microphoneUnavailable && state.voiceRetryRequired ? "請重試收音" : microphoneUnavailable && state.muted ? "麥克風已暫停" : labels[interviewTiming.phase] || (state.draft.trim() ? "輸入回答中" : "輪到你回答");
   const value = document.getElementById("silence-value");
@@ -1681,7 +2135,7 @@ function updateConversationHud() {
   const progress = document.getElementById("silence-progress");
   if (progress) progress.style.width = remaining == null ? "0%" : `${(1 - remaining / interviewTiming.waitMs) * 100}%`;
   const voice = document.getElementById("voice-status-text");
-  if (voice) voice.textContent = status + (state.voiceEnabled && interviewTiming.phase === "listening" && state.recording ? "；直接說話，停頓約 1.6 秒後送出" : "");
+  if (voice) voice.textContent = status + (liveLink && interviewTiming.phase === "listening" ? "；直接說話，說完教授會即時接話" : state.voiceEnabled && interviewTiming.phase === "listening" && state.recording ? "；直接說話，停頓約 1.6 秒後送出" : "");
   const level = document.getElementById("microphone-level");
   if (level) level.style.width = `${Math.min(100, microphoneLevel * 700)}%`;
   const mic = app.querySelector('[data-action="mic"] small');
@@ -1895,6 +2349,7 @@ app.addEventListener("click", async (event) => {
   else if (a === "skip-question-audio") { stopQuestionAudio(); beginListening(state.currentEvent?.seq); render(); }
   else if (a === "skip-devices") { state.config.mode = "text"; startInterview(); }
   else if (a === "captions") await toggleCaptions();
+  else if (a === "live-probe") { state.liveProbe = { status: "idle", at: 0 }; maybeProbeLive(true); render(); }
   else if (a === "end") { if (state.finishing) return; state.confirmEnd = true; render(); }
   else if (a === "continue") { state.confirmEnd = false; render(); }
   else if (a === "confirm-end") finishInterview("manual");
@@ -1916,11 +2371,21 @@ app.addEventListener("change", async (event) => {
   } else if (el.dataset.microphone !== undefined) {
     state.microphoneId = el.value;
     checkDevices();
+  } else if (el.dataset.recognition !== undefined) {
+    if (!state.preferencesReady || !["browser", "server"].includes(el.value) || el.value === state.recognitionMode) return;
+    const hadAudioConsent = state.consentAudio;
+    state.recognitionMode = el.value;
+    state.consentAudio = false;
+    state.liveVoiceConsent = false;
+    persistPreferences();
+    if (hadAudioConsent) state.preferencesMessage = "語音辨識位置已變更，請重新允許語音辨識與教授語音。";
+    render();
   } else if (el.dataset.preference !== undefined) {
     const field = el.dataset.preference;
     if (!state.preferencesReady || !preferenceFields.includes(field)) return;
     state[field] = el.checked;
     if (!state.consentModel) { state.resumeConsent = false; state.cameraMetricsConsent = false; }
+    if (!state.consentModel || !state.consentAudio) state.liveVoiceConsent = false;
     if (!state.cameraAnalysisConsent) state.cameraMetricsConsent = false;
     if (!state.auth?.authenticated) state.saveHistory = false;
     persistPreferences();

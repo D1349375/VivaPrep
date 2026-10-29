@@ -5,7 +5,7 @@ import { cliWorkDirectory, config, dataDirectory, ensureDataDirectory } from "./
 import { AgentService } from "./server/agent-service.js";
 import { AntigravityCliProvider, GeminiApiProvider, MockAgentProvider } from "./server/agent-provider.js";
 import { InterviewOrchestrator } from "./server/interview-orchestrator.js";
-import { createHttpHandler } from "./server/http-api.js";
+import { createHttpHandler, createUpgradeHandler } from "./server/http-api.js";
 import { PanelCoordinator } from "./server/panel-coordinator.js";
 import { getProfile, profiles, publicProfile } from "./server/profiles.js";
 import { AppDatabase } from "./server/database.js";
@@ -16,6 +16,7 @@ import { AuthService } from "./server/auth-service.js";
 import { EmailDelivery } from "./server/email-delivery.js";
 import { InterviewHistoryRepository } from "./server/interview-history-repository.js";
 import { loadApplicationKey } from "./server/crypto-utils.js";
+import { LiveVoiceService } from "./server/live-voice.js";
 
 await ensureDataDirectory();
 const applicationKey = await loadApplicationKey({ dataDirectory, secret: config.appSecret, production: config.production });
@@ -56,6 +57,12 @@ const importedDatabaseReports = await reportRepository.importLegacyDatabase();
 const importedLegacyReports = await reportRepository.importLegacyJson(join(dataDirectory, "reports.json"));
 reportRepository.seedOfficialSources(profiles.flatMap((profile) => profile.sources || []));
 const interviewHistoryRepository = new InterviewHistoryRepository({ database, applicationKey, retentionMonths: config.savedHistoryRetentionMonths });
+const liveVoice = new LiveVoiceService({
+  mode: config.liveVoiceMode,
+  apiKey: config.liveVoiceApiKey,
+  model: config.liveVoiceModel,
+  voice: config.ttsSpeakerVoices.portfolio || config.ttsVoice,
+});
 const orchestrator = new InterviewOrchestrator({
   store,
   agentService,
@@ -65,6 +72,7 @@ const orchestrator = new InterviewOrchestrator({
   interviewHistoryRepository,
   getProfile,
   config,
+  liveVoice,
 });
 const root = fileURLToPath(new URL(".", import.meta.url));
 const handler = createHttpHandler({
@@ -81,10 +89,12 @@ const handler = createHttpHandler({
 });
 
 const server = createServer(handler);
+server.on("upgrade", createUpgradeHandler({ authService, store, orchestrator }));
 server.listen(config.port, config.host, () => {
   process.stdout.write("VivaPrep is available at http://" + config.host + ":" + config.port + "\n");
   process.stdout.write("Interview agents: " + agentService.mode + " (" + agentService.modelId + ")\n");
   process.stdout.write("Speech adapters: " + speechAdapter.status().provider + "\n");
+  process.stdout.write("Gemini Live voice (warm-up): " + (liveVoice.configured ? liveVoice.model : "off") + "\n");
   process.stdout.write("SQLite database: " + config.databasePath + "\n");
   if (importedDatabaseReports || importedLegacyReports) process.stdout.write("Imported " + (importedDatabaseReports + importedLegacyReports) + " legacy report(s).\n");
   process.stdout.write("Account registration email mode: " + emailDelivery.mode + "\n");
@@ -100,6 +110,7 @@ const sessionCleanup = setInterval(() => {
 }, 60 * 1000);
 sessionCleanup.unref();
 server.on("close", () => {
+  liveVoice.close();
   provider.close?.();
   speechAdapter.close();
   clearInterval(sessionCleanup);

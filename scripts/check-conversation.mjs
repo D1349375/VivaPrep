@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { InterviewTiming } from "../src/interview-timing.js";
 import { PanelCoordinator, isRepeatedQuestion } from "../server/panel-coordinator.js";
 import { InterviewOrchestrator } from "../server/interview-orchestrator.js";
+import { buildAgentPrompt } from "../server/agent-provider.js";
 
 let now = 0;
 const timing = new InterviewTiming(() => now);
@@ -78,4 +79,18 @@ function fixture() {
   assert.equal(session.turns[0].answerText, "");
   assert.equal(session.transcribingTurnId, null);
 }
-console.log("PASS: playback timing, semantic repeats, resumed-speech races, and stale/concurrent transcription");
+{
+  // Browser streaming sends text with the event it answered; a follow-up on the same turn makes it stale.
+  const { session, orchestrator } = fixture();
+  session.currentEvent = { ...session.currentEvent, seq: 3 };
+  await assert.rejects(orchestrator.submitAnswer("test", { turnId: "t1", eventSeq: 1, text: "對上一個追問的回答" }), { code: "STALE_TURN" });
+  assert.equal(session.turns[0].answerText, "");
+  // Speech answers are marked so the professor reads homophones like 一滴 as DP instead of questioning them.
+  await orchestrator.submitAnswer("test", { turnId: "t1", eventSeq: 3, text: "我用一滴解這題", speechInput: "browser-stream" });
+  assert.equal(session.turns[0].answerFromSpeech, true);
+  const speechPrompt = buildAgentPrompt({ role: { name: "測試教授", dimension: "技術", instructions: "" }, task: "assessment", context: { answer: "我用一滴解這題", answerFromSpeech: true, turns: [] } });
+  assert.match(speechPrompt, /DP 變成「一滴」/);
+  assert.doesNotMatch(buildAgentPrompt({ role: { name: "測試教授", dimension: "技術", instructions: "" }, task: "assessment", context: { answer: "打字回答", turns: [] } }), /語音辨識提醒/);
+  assert.match(buildAgentPrompt({ task: "review", context: { turns: [{ turnId: "t1", answerText: "我用一滴", answerFromSpeech: true }] } }), /不要把辨識錯字評為表達問題/);
+}
+console.log("PASS: playback timing, semantic repeats, resumed-speech races, stale/concurrent transcription, and stale streamed answers");

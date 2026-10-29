@@ -4,6 +4,7 @@ import { extname, join, resolve, sep } from "node:path";
 import { createPracticeProfile, publicProfile } from "./profiles.js";
 import { appendSetCookie } from "./auth-service.js";
 import { createHash } from "node:crypto";
+import { acceptWebSocket, rejectUpgrade } from "./websocket.js";
 
 export function portfolioBatchScope(batchId, authContext) {
   const owner = authContext?.userId || authContext?.guestOwnerHash;
@@ -207,6 +208,7 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
             geminiApiConfigured: Boolean(config.geminiApiKey),
             portfolioParsingAvailable: portfolioParsingAvailable(),
             speech: orchestratorSpeech(orchestrator),
+            liveVoice: orchestrator.liveVoice?.status() || { enabled: false, model: null, mode: "off" },
             profiles: profileList.length,
             timestamp: new Date().toISOString(),
           });
@@ -215,6 +217,13 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
         if (method === "POST" && pathname === "/api/agent/prewarm") {
           // Sends no student data; it only opens a model connection ahead of the interview.
           json(response, 202, { warming: agentService.prewarm() });
+          return;
+        }
+        if (method === "POST" && pathname === "/api/live/probe") {
+          // Opens and closes one Gemini Live connection; sends no student data.
+          authService.rateLimit("live-probe", request.socket.remoteAddress, 30, 60 * 60 * 1000);
+          const result = orchestrator.liveVoice ? await orchestrator.liveVoice.probe() : { available: false, reason: "disabled" };
+          json(response, 200, result);
           return;
         }
         if (method === "GET" && pathname === "/api/profiles") {
@@ -477,6 +486,33 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
       const message = status < 500 || safeProviderErrors.has(code) ? error.message : "伺服器暫時無法完成要求。";
       if (status >= 500) process.stderr.write(`[api-error] ${code}\n`);
       json(response, status, { error: { code, message } });
+    }
+  };
+}
+
+// WebSocket for Gemini Live voice: /api/sessions/:id/live?ticket=…
+// Browsers cannot add the CSRF header to a WebSocket, so the socket needs a
+// same-origin request, the session owner's cookie and a single-use ticket
+// issued by the CSRF-checked session creation.
+export function createUpgradeHandler({ authService, store, orchestrator }) {
+  return function upgrade(request, socket, head) {
+    try {
+      const url = new URL(request.url, "http://localhost");
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts.length !== 4 || parts[0] !== "api" || parts[1] !== "sessions" || parts[3] !== "live") return rejectUpgrade(socket, 404, "Not found");
+      const origin = request.headers.origin;
+      let originHost = "";
+      try { originHost = new URL(origin).host; } catch { /* rejected below */ }
+      if (!origin || originHost !== request.headers.host) return rejectUpgrade(socket, 403, "Cross-site request rejected");
+      const authContext = authService.resolveContext(request);
+      const sessionId = parts[2];
+      if (!authService.ownsInterviewSession(authContext, store.get(sessionId))) return rejectUpgrade(socket, 404, "Session not found");
+      if (!orchestrator.liveVoice?.consumeTicket(sessionId, url.searchParams.get("ticket"))) return rejectUpgrade(socket, 403, "Invalid ticket");
+      const ws = acceptWebSocket(request, socket, head, { maxPayload: 256 * 1024 });
+      if (!ws) return;
+      Promise.resolve().then(() => orchestrator.attachLive(sessionId, ws)).catch(() => ws.close(1011, "live unavailable"));
+    } catch {
+      rejectUpgrade(socket, 400, "Bad request");
     }
   };
 }
