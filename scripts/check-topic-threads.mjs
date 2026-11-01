@@ -31,7 +31,7 @@ for (const question of ["這個專題叫什麼名字？", "你在學校社團做
   assert.equal(violatesAnonymity(question), false, question);
 }
 
-function fixture({ durationMinutes = 5, roster = ["portfolio", "technical", "logic"], answer } = {}) {
+function fixture({ durationMinutes = 5, roster = ["portfolio", "technical", "logic"], answer, realPlanner = false } = {}) {
   const calls = [];
   const events = [];
   let sessionRef;
@@ -67,6 +67,8 @@ function fixture({ durationMinutes = 5, roster = ["portfolio", "technical", "log
     getProfile: () => ({ id: "p", version: 1, school: "逢甲大學", department: "資訊工程學系", academicYear: 115, admissionRoute: "個人申請", officialFacts: [], unknowns: [], profileStatus: "official", sources: [] }),
     config: { ...config, maxAnswerLength: 8000 },
   });
+  // These checks count follow-ups from the first question, so they open on an experience instead of the greeting.
+  if (!realPlanner) orchestrator.openingPlanner = { choose: ({ eligibleRoles }) => ({ id: "personal_contribution", roleId: eligibleRoles[0], instruction: "從親手完成的工作切入。", claimIndex: null, claim: null }) };
   return { orchestrator, calls, events, get session() { return sessionRef; }, durationMinutes, roster };
 }
 
@@ -75,6 +77,22 @@ async function answerCurrent(f, text, elapsedSeconds) {
   const result = await f.orchestrator.submitAnswer(f.session.id, { turnId, text, elapsedSeconds });
   await f.session.processingPromise;
   return result;
+}
+
+// Every real interview opens with the fixed greeting, then the model follows the introduction.
+for (const [durationMinutes, span] of [[5, "一分鐘"], [3, "三十秒"]]) {
+  const f = fixture({ realPlanner: true });
+  await f.orchestrator.createSession({ profileId: "p", panelIds: f.roster, durationMinutes, mode: "text", confirmedClaims: [{ text: "我做過校園借閱系統。" }] }, { guestOwnerHash: "o" });
+  assert.equal(f.calls.length, 0, "The greeting needs no model call");
+  const [opening] = f.session.turns;
+  assert.equal(opening.questionFocus, "introduction");
+  assert.ok(opening.questionText.startsWith("同學你好，我是") && opening.questionText.includes(`先請你用${span}簡單自我介紹`), opening.questionText);
+  assert.equal(violatesAnonymity(opening.questionText), false, "Telling the student not to name the school is not asking for it");
+  assert.equal(f.session.timings.find((item) => item.stage === "opening_question").modelCalls, 0);
+  await answerCurrent(f, "我喜歡寫程式，高二做過借閱系統。", 30);
+  const followUp = f.calls.at(-1).context;
+  assert.equal(followUp.conversation.reason, "after_introduction");
+  assert.equal(followUp.conversation.nextAngle.claim, "我做過校園借閱系統。", "The held angle is offered once the introduction is done");
 }
 
 // A thread gets at most maxFollowUps follow-ups, then the next question is forced onto a new thread.

@@ -169,10 +169,14 @@ const planner = new OpeningPlanner(() => 0);
 let prior = null;
 for (let n = 0; n < 30; n++) {
   const plan = planner.choose({ ownerKey: "guest", profileId: "same", claims: ["經驗一", "經驗二"], eligibleRoles: ["technical"] });
-  assert.notEqual(plan.id, prior, "Consecutive sessions must choose different opening angles even with the same animation seed");
+  assert.equal(plan.id, "introduction", "Every interview opens with a greeting and a self-introduction");
+  assert.match(plan.instruction, /同學你好/);
+  assert.notEqual(plan.nextAngle.id, prior, "Consecutive sessions must hold different follow-on angles even with the same animation seed");
+  assert.notEqual(plan.nextAngle.id, "introduction");
   assert.equal(plan.roleId, "technical");
-  assert.equal(plan.claim, plan.id === "introduction" ? null : "經驗一");
-  prior = plan.id;
+  assert.equal(plan.claim, null);
+  assert.equal(plan.nextAngle.claim, "經驗一");
+  prior = plan.nextAngle.id;
 }
 const session = { id: "test", status: "active", captionsEnabled: true, mode: "text", voiceEnabled: false, consentSnapshot: {}, ownerUserId: null, sources: [] };
 const orchestrator = new InterviewOrchestrator({ store: { get: () => session, save() {} }, agentService: {}, coordinator: {}, speechAdapter: { status: () => ({ available: true }) }, config: {} });
@@ -188,8 +192,12 @@ await multi.createSession({ profileId: "fcu-general", panelIds: ["portfolio"], d
 assert.equal(stored.claims.length, 10, "Multiple PDFs must not be silently limited to the old eight-claim cap");
 assert.equal(stored.portfolioEvidence[9].documentId, "doc-two");
 assert.equal(stored.portfolioEvidence[9].sourceFilename, "two.pdf");
-assert.equal(openingContext.portfolioEvidence[9].claimIndex, 9);
-assert.equal(openingContext.openingPlan.claim, openingContext.openingPlan.id === "introduction" ? null : stored.claims[openingContext.openingPlan.claimIndex]);
+assert.equal(stored.portfolioEvidence[9].claimIndex, 9);
+assert.equal(openingContext, undefined, "The greeting opening does not wait for the model");
+assert.equal(stored.openingPlan.id, "introduction");
+assert.match(stored.turns[0].questionText, /^同學你好，我是.+教授。先請你用一分鐘簡單自我介紹/);
+assert.equal(stored.turns[0].questionFocus, "introduction");
+assert.equal(stored.openingPlan.nextAngle.claim, stored.claims[stored.openingPlan.nextAngle.claimIndex], "The angle held for after the introduction points at a real claim");
 await assert.rejects(() => multi.createSession({ profileId: "fcu-general", panelIds: ["portfolio"], durationMinutes: 5, mode: "text", confirmedClaims: Array.from({length:41},()=>({text:"合成測試"})), consent: { modelProcessing: true } }), /40/);
 Object.assign(e.state, { agentMode:"cli", auth:{authenticated:false}, speechStatus:{provider:"whisper-local",processingLocation:"local",available:true}, config:{mode:"voice",duration:5}, preferencesReady:false });
 e.loadPreferences(); assert.match(e.startRestriction(),/Agent/);

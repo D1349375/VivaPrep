@@ -329,7 +329,8 @@ a { color: inherit; text-decoration: none; }
 .device-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 14px; align-items: stretch; }
 .device-preview-card, .device-status-card { padding: 17px; }
 .video-preview { position: relative; display: grid; min-height: 290px; overflow: hidden; place-items: center; margin: 12px 0; border-radius: 8px; background: linear-gradient(145deg, #e9e6dc, #dad9d0); }
-.video-preview video { position: absolute; width: 100%; height: 100%; object-fit: cover; opacity: 0; }
+/* Mirrored like the camera panel: moving left moves left on screen, so framing is easy. */
+.video-preview video { position: absolute; width: 100%; height: 100%; object-fit: cover; opacity: 0; transform: scaleX(-1); }
 .video-preview.has-video video { opacity: 1; }
 .camera-framing-guide { display: none; position: absolute; z-index: 2; inset: 0; pointer-events: none; }
 .has-video .camera-framing-guide { display: block; }
@@ -524,6 +525,28 @@ a { color: inherit; text-decoration: none; }
 .camera-trial-panel.is-collapsed .camera-trial-heading { margin: 0; }
 .camera-trial-panel.is-collapsed .camera-trial-content { display: none; }
 .camera-recalibrate { pointer-events: auto; width: 100%; margin-top: 6px; padding: 5px; border: 1px solid rgba(255,255,255,.18); border-radius: 5px; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+.camera-trial-stage { position: relative; }
+.camera-pose-overlay, .camera-demo-tag, .camera-demo-badges, .camera-demo-caption { display: none; }
+.camera-trial-heading button[aria-pressed="true"] { border-color: rgba(168,201,149,.6); color: #cfe3c2; }
+/* Demo view: bottom-right picture-in-picture with the landmark overlay, sized for screen recordings. */
+/* Sits above the interview dock and to the right of the centered answer composer (min(690px, 88vw)). */
+.camera-trial-panel.is-demo { top: auto; bottom: 74px; width: clamp(220px, calc(50vw - 375px), 380px); max-height: none; overflow: visible; padding: 8px; }
+.camera-trial-panel.is-demo .camera-trial-heading { margin-bottom: 6px; }
+.camera-trial-panel.is-demo .camera-trial-stage video { aspect-ratio: 4 / 3; }
+.camera-trial-panel.is-demo .camera-pose-overlay { position: absolute; inset: 0; display: block; width: 100%; height: 100%; border-radius: 6px; transform: scaleX(-1); }
+.camera-trial-panel.is-demo .camera-demo-tag { position: absolute; top: 7px; left: 7px; display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 999px; background: rgba(20,26,24,.72); font-size: 10px; letter-spacing: .02em; }
+.camera-demo-tag i { width: 6px; height: 6px; border-radius: 50%; background: #e4a081; animation: camera-demo-pulse 1.6s ease-in-out infinite; }
+@keyframes camera-demo-pulse { 50% { opacity: .35; } }
+.camera-trial-panel.is-demo .camera-demo-badges { position: absolute; right: 7px; bottom: 7px; left: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
+.camera-demo-badges span { display: flex; align-items: baseline; gap: 6px; padding: 4px 9px; border-left: 3px solid rgba(255,255,255,.35); border-radius: 6px; color: rgba(255,255,255,.7); background: rgba(20,26,24,.78); font-size: 11px; }
+.camera-demo-badges strong { color: #fff; font-size: 13px; font-weight: 600; }
+.camera-demo-badges [data-tone="good"] { border-left-color: #a8c995; }
+.camera-demo-badges [data-tone="warn"] { border-left-color: #e4a081; }
+.camera-demo-badges [data-tone="warn"] strong { color: #f3c3a6; }
+.camera-trial-panel.is-demo .camera-demo-caption { display: block; margin-top: 6px; color: rgba(255,255,255,.55); font-size: 10px; }
+.camera-trial-panel.is-demo .camera-trial-metrics, .camera-trial-panel.is-demo .camera-trial-phase, .camera-trial-panel.is-demo .camera-recalibrate, .camera-trial-panel.is-demo .camera-trial-content > small:not(.camera-demo-caption) { display: none; }
+.camera-trial-panel.is-demo[data-status="measuring"] .camera-trial-status { display: none; }
+.camera-trial-panel.is-demo .camera-trial-status { margin: 6px 0 0; }
 .camera-results-card details > summary { color: var(--ink-soft); font-size: 12px; cursor: pointer; }
 .camera-results-card details[open] > summary { margin-bottom: 10px; }
 .posture-feedback-card { margin: 18px 0; padding: 20px; border: 1px solid var(--line); border-radius: 9px; background: var(--white); }
@@ -600,6 +623,7 @@ a { color: inherit; text-decoration: none; }
   .camera-trial-metrics { gap: 3px; }
   .camera-trial-metrics span { padding: 4px; font-size: 9px; }
   .camera-trial-metrics strong { font-size: 10px; }
+  .camera-trial-panel.is-demo { bottom: 72px; width: min(240px, calc(100vw - 16px)); }
 }
 @media (max-width: 760px) {
   body:not(.is-interview) { padding-bottom: 58px; }
@@ -871,7 +895,6 @@ a { color: inherit; text-decoration: none; }
 .recognition-option strong, .recognition-option small { display: block; }
 .recognition-option strong { font-size: 11px; }
 .recognition-option small { margin-top: 2px; color: var(--muted); font-size: 11px; }
-.answer-composer textarea.is-live-transcript { color: #5d6b60; font-style: italic; }
 .permission-summary { padding: 22px 26px; margin: 20px 0; border: 1px solid var(--line, #ddd5cc); border-radius: 18px; background: #faf7f0; }
 .permission-summary p { font-size: 13px; line-height: 1.8; margin: 10px 0 14px; color: #6b665e; }
 .permission-summary .permission-warning { color: #9b4e32; font-weight: 600; }

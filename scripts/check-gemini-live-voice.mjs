@@ -284,9 +284,9 @@ fake.onClient = (conn, message) => { if (/面試開始/.test(message.clientConte
   const opening = sessionEvents(sessionId, "interview.event")[0];
   assert.equal(opening.live, undefined);
   assert.equal(opening.liveFallback.reason, "unavailable");
-  assert.equal(opening.utterance, "你好，可以先用一分鐘簡單介紹一下自己嗎？");
+  assert.equal(opening.utterance, "同學你好，我是陳教授。先請你用一分鐘簡單自我介紹，姓名和就讀學校不用說。");
   assert.equal(session.live.state, "fallback");
-  assert.equal(agentCalls.filter((call) => call.context.sessionId === sessionId && call.context.task === "opening").length, 1);
+  assert.equal(agentCalls.filter((call) => call.context.sessionId === sessionId && call.context.task === "opening").length, 0, "The greeting opening needs no model call");
   await until(() => sessionEvents(sessionId, "interview.audio.ready").length === 1, "turn-based TTS for the opening");
 }
 

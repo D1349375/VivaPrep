@@ -115,10 +115,10 @@ const first = recognitions[0];
 assert.deepEqual([first.lang, first.continuous, first.interimResults], ["zh-TW", true, true]);
 assert.equal(first.starts[0], track, "The selected microphone track is offered to recognition");
 
-// 2. Interim words show in the answer box without becoming a typed draft.
+// 2. Interim words are tracked but stay out of the answer box, so recognition errors stay unseen.
 first.emit([["我負責資料", false]]);
-assert.equal(textarea.value, "我負責資料");
-assert.equal(textarea.classList.live, true, "Live words are styled apart from typed text");
+assert.equal(textarea.value, "", "Recognized words are not shown to the student");
+assert.equal(e.state.liveTranscript, "我負責資料");
 assert.equal(e.state.draft, "");
 assert.equal(e.timing.phase, "capturing");
 assert.equal(e.timing.remainingMs(), null, "Silence countdown pauses while the student is answering");

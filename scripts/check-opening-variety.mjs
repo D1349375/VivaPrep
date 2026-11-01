@@ -26,8 +26,10 @@ for (const withClaims of [true, true, true, false, false]) {
     if (id) { const deleted = await fetch(base + "/api/sessions/" + id, { method: "DELETE", headers }); assert.equal(deleted.status, 204); }
   }
 }
-assert.equal(new Set(results.filter((item) => item.withClaims).map((item) => item.question)).size, 3);
-assert.notEqual(results[3].question, results[4].question);
+for (const item of results) {
+  assert.match(item.question, /你好/, `Opening greets the student: ${item.question}`);
+  assert.match(item.question, /自我介紹|介紹一下自己/, `Opening asks for a self-introduction: ${item.question}`);
+}
 await mkdir(new URL("../.data/verification/", import.meta.url), { recursive: true });
 await writeFile(new URL("../.data/verification/openings.json", import.meta.url), JSON.stringify(results, null, 2));
-console.log("PASS: five real Gemini openings, same profile and animation seed, varied questions with and without portfolio claims");
+console.log("PASS: five openings greet the student and ask for a self-introduction, with and without portfolio claims");

@@ -30,7 +30,7 @@ export class MockAgentProvider {
   }
 
   #opening(role, context) {
-    if (context.openingPlan?.id === "introduction") return { ...this.#assessment(role, context), candidateQuestion: "你好，可以先用一分鐘簡單介紹一下自己嗎？", questionFocus: "introduction", dialogueAction: "opening" };
+    if (context.openingPlan?.id === "introduction") return { ...this.#assessment(role, context), candidateQuestion: `同學你好，我是${role.name}。先請你用一分鐘簡單自我介紹，姓名和就讀學校不用說。`, questionFocus: "introduction", dialogueAction: "opening" };
     const claim = context.claims?.[0];
     const focus = role.id === "portfolio"
       ? claim
@@ -314,18 +314,18 @@ function geminiResponseText(payload) {
 
 export function buildAgentPrompt({ role, task, context }) {
   if (!["review", "review_synthesis"].includes(task)) {
-    const action = task === "opening" ? `依本場開場角度提出一個簡短開場，dialogueAction=opening。${context.openingPlan?.instruction || "從已確認經驗切入。"}有指定 claim 時必須從該經驗切入，不要總是選第一個主張。`
+    const action = task === "opening" ? `依本場開場角度提出一個簡短開場，dialogueAction=opening。${context.openingPlan?.instruction || "從已確認經驗切入。"}${context.openingPlan?.claim ? "有指定 claim 時必須從該經驗切入，不要總是選第一個主張。" : ""}`
       : task === "rephrase" ? "尚未收到回答，用『還是我換個方式問』把原題拆成一個更容易回答的小步驟；維持 previousFocus，dialogueAction=rephrase。"
       : task === "switch_topic" ? "換話題：用一句自然轉場（例如「好，這部分我了解了。那我們換個方向」）改問新話題，dialogueAction=switch_topic。必須離開 conversation.currentThread.questions 談的同一段經驗或作品，不能只換角度追問同一件事；優先改談另一段尚未談過的 claims，或 conversation.unexploredAspects 中的面向。不能重問原題。"
       : task === "final_question" ? "接近結束，明確用『最後一個問題』自然過渡，只問一個可在30秒內簡短回答的新重點或補充機會，dialogueAction=switch_topic；不要開啟新專題、複雜技術題或要求多段回答。"
-      : "根據最新回答追問尚未說清楚的新細節，dialogueAction=follow_up。已回答的內容不能再要求重述。這條話題線最多再追問 conversation.currentThread.followUpsLeft 次；若學生已說清楚行動、方法與結果，或表示不知道、想換題，就提早用一句自然轉場改問另一段經驗或另一個面向，dialogueAction=switch_topic。conversation.reason 為 after_introduction 時，從自介中挑一個具體線索開始新話題。";
+      : "根據最新回答追問尚未說清楚的新細節，dialogueAction=follow_up。已回答的內容不能再要求重述。這條話題線最多再追問 conversation.currentThread.followUpsLeft 次；若學生已說清楚行動、方法與結果，或表示不知道、想換題，就提早用一句自然轉場改問另一段經驗或另一個面向，dialogueAction=switch_topic。conversation.reason 為 after_introduction 時，從自介中挑一個具體線索開始新話題；自介沒有可追的線索時，依 conversation.nextAngle 的方向切入，有指定 claim 就從該經驗切入。";
     const data = {
       previousQuestion: context.previousQuestion,
       previousFocus: context.previousFocus,
       answer: context.answer,
       answerFromSpeech: context.answerFromSpeech || undefined,
       claims: context.claims,
-      openingPlan: context.openingPlan,
+      openingPlan: context.openingPlan && { id: context.openingPlan.id, instruction: context.openingPlan.instruction, claim: context.openingPlan.claim },
       portfolioEvidence: context.portfolioEvidence,
       turns: context.turns,
       conversation: context.conversation,

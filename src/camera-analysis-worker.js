@@ -8,8 +8,11 @@ const POSE_POINTS = [0, 11, 12, 15, 16, 19, 20];
 
 let faceLandmarker;
 let poseLandmarker;
+// The demo overlay draws every landmark; analysis alone needs only the subsets above.
+let overlay = false;
 
 self.onmessage = async ({ data }) => {
+  if (data?.type === "overlay") { overlay = data.enabled === true; return; }
   if (data?.type === "init") {
     try {
       const vision = await import(`${MEDIAPIPE_ROOT}/vision_bundle.mjs`);
@@ -55,6 +58,10 @@ self.onmessage = async ({ data }) => {
       face: face?.length ? pick(face, FACE_POINTS) : null,
       blendshapes,
       pose: pose?.length ? pick(pose, POSE_POINTS) : null,
+      overlay: overlay ? {
+        face: face?.length ? face.map((point) => [point.x, point.y]) : null,
+        pose: pose?.length ? pose.map((point) => [point.x, point.y, point.visibility ?? 1]) : null,
+      } : undefined,
     });
   } catch (error) {
     self.postMessage({ type: "sample-error", timestamp, context, message: error?.message || "影格分析失敗。" });

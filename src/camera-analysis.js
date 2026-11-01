@@ -7,8 +7,9 @@ const EPISODE_MIN_MS = 1000;
 
 function percent(value) { return `${Math.round(value * 100)}%`; }
 
-export function createCameraAnalyzer(onUpdate = () => {}) {
+export function createCameraAnalyzer(onUpdate = () => {}, { onOverlay = () => {} } = {}) {
   let worker = null;
+  let overlayEnabled = false;
   let video = null;
   let running = false;
   let inFlight = false;
@@ -144,8 +145,10 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
     segment.awayRun = null;
   }
 
-  function acceptSample(raw) {
+  function acceptSample({ overlay, ...raw }) {
     inFlight = false;
+    // Drawing points go straight to the demo view and stay out of the summary.
+    if (overlayEnabled && overlay) onOverlay(overlay);
     sampleCount++;
     if (firstSampleAt == null) firstSampleAt = raw.timestamp;
     const sample = { ...raw, ...extractSignals(raw) };
@@ -310,6 +313,7 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
         notify();
       }
     }, 90000);
+    worker.postMessage({ type: "overlay", enabled: overlayEnabled });
     worker.postMessage({ type: "init" });
     scheduleVideoFrames();
     loopTimer = window.setInterval(() => {
@@ -329,6 +333,12 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
   }
 
   function snapshot() { return buildSummary(); }
+
+  function setOverlay(enabled) {
+    overlayEnabled = enabled === true;
+    worker?.postMessage({ type: "overlay", enabled: overlayEnabled });
+    if (!overlayEnabled) onOverlay(null);
+  }
 
   // Restart calibration, e.g. after the student moves the laptop or chair.
   function recalibrate() {
@@ -357,7 +367,7 @@ export function createCameraAnalyzer(onUpdate = () => {}) {
     return keepSummary ? { ...result, status: "stopped" } : null;
   }
 
-  return { start, setVideo, snapshot, stop, recalibrate };
+  return { start, setVideo, snapshot, stop, recalibrate, setOverlay };
 }
 
 export { percent };

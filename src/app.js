@@ -1,4 +1,5 @@
 import { createCameraAnalyzer, percent } from "./camera-analysis.js";
+import { createPoseOverlay, liveBadges } from "./pose-overlay.js";
 import { InterviewTiming } from "./interview-timing.js";
 import { buildPostureFeedback } from "./posture-feedback.js";
 import { VoiceActivityDetector } from "./voice-activity.js";
@@ -53,7 +54,10 @@ const state = {
   mfaSecret: "", mfaRecoveryCodes: [], pendingReports: null, pendingPrivacyRequests: null, sharePolicy: null, sharePreview: null, shareResult: null, shareBusy: false,
   shareWithdrawalMessage: "", shareDraft: null, saveHistory: false,
 };
-const cameraAnalyzer = createCameraAnalyzer(updateCameraHud);
+const cameraAnalyzer = createCameraAnalyzer(updateCameraHud, { onOverlay: (points) => poseOverlay?.update(points) });
+// Bottom-right demo view with the landmark overlay, for recordings; off during normal practice.
+const CAMERA_DEMO_KEY = "vivaprep.cameraDemo.v1";
+let poseOverlay = null;
 const interviewTiming = new InterviewTiming();
 let questionAudio = null;
 let audioPreparationTimer = null;
@@ -200,7 +204,7 @@ function settingsPage() {
     ? "伺服器目前未啟用即時對談；暖身對談使用回合制。"
     : `只用於「暖身對談」。面試中麥克風音訊會持續經 VivaPrep 後端即時送到 Google Gemini Live API（${esc(liveVoiceModel())}），由它聽你的回答並直接說出教授的下一句，延遲約 1～2 秒；教授指示含校系情境與你確認的備審主張，雙方逐字稿存入本場紀錄供復盤。使用 Gemini API 免費層時，Google 會用送出的內容（含語音與逐字稿）改進其產品，並可能由人工審閱，請不要說出姓名、就讀學校或其他個人資料。需同時允許 Agent 與語音；連不上、額度用完或中途斷線時自動改用回合制。`;
   const choice = (value, title, copy, disabled = false) => `<label class="recognition-option"><input type="radio" name="recognitionMode" value="${value}" data-recognition ${state.recognitionMode === value ? "checked" : ""} ${disabled || !state.preferencesReady ? "disabled" : ""} /><span><strong>${title}</strong><small>${copy}</small></span></label>`;
-  const recognitionChoice = `<fieldset class="recognition-choice"><legend>語音辨識位置</legend>${choice("browser", "瀏覽器串流辨識（較快，音訊送 Google）", streamingRecognitionSupported() ? "邊說邊出現文字，停頓後約 1～2 秒送出。" : "此瀏覽器不支援串流辨識（建議使用 Chrome），會改用後端辨識。")}${choice("server", localLabel, "說完後上傳整段錄音辨識，一句話約需 15～20 秒。")}<small>更換辨識位置後，需要重新允許語音辨識。</small></fieldset>`;
+  const recognitionChoice = `<fieldset class="recognition-choice"><legend>語音辨識位置</legend>${choice("browser", "瀏覽器串流辨識（較快，音訊送 Google）", streamingRecognitionSupported() ? "停頓後約 1～2 秒送出，不用等整段上傳。" : "此瀏覽器不支援串流辨識（建議使用 Chrome），會改用後端辨識。")}${choice("server", localLabel, "說完後上傳整段錄音辨識，一句話約需 15～20 秒。")}<small>更換辨識位置後，需要重新允許語音辨識。</small></fieldset>`;
   const row = (field, title, copy, disabled = false) => `<label class="toggle-row"><span><strong>${title}</strong><small>${copy}</small></span><input type="checkbox" data-preference="${field}" ${state[field] ? "checked" : ""} ${disabled || !state.preferencesReady ? "disabled" : ""} /><i></i></label>`;
   return `<div class="step-intro"><div class="eyebrow accent">PREFERENCES</div><h1>資料使用設定</h1><p>選擇一次，之後在這個瀏覽器沿用。訪客與不同帳號各自記住偏好；不會保存備審原檔或回答到瀏覽器設定中。你可以隨時關閉授權。</p></div><section class="setting-card permission-settings">
   ${row("consentModel", "允許 Agent 處理練習內容", modelCopy + " 未允許時無法開始 Gemini 面試。")}
@@ -661,7 +665,7 @@ function ensureCameraPanel() {
   panel.id = "camera-trial-panel";
   panel.className = "camera-trial-panel is-collapsed";
   panel.setAttribute("aria-label", "本機鏡頭試測");
-  panel.innerHTML = '<div class="camera-trial-heading"><span><i></i>本機鏡頭試測</span><div class="camera-trial-actions"><button type="button" data-camera-panel-toggle aria-expanded="false">展開</button><button type="button" data-camera-stop aria-label="停止本機鏡頭試測">停止</button></div></div><div class="camera-trial-content"><video id="camera-trial-video" autoplay playsinline muted></video><div class="camera-trial-status" id="camera-trial-status">正在準備模型…</div><div class="camera-trial-metrics"><span>臉部可用<strong id="camera-face-quality">—</strong></span><span>肩部可用<strong id="camera-pose-quality">—</strong></span><span>視線<strong id="camera-head-direction">—</strong></span><span>坐姿<strong id="camera-posture">—</strong></span><span>上半身移動<strong id="camera-body-motion">—</strong></span></div><button type="button" class="camera-recalibrate" data-camera-recalibrate>重新校正</button><div class="camera-trial-phase" id="camera-trial-phase">等候面試事件</div><small>畫面與數值僅留在此瀏覽器・不保存</small></div>';
+  panel.innerHTML = '<div class="camera-trial-heading"><span><i></i>本機鏡頭試測</span><div class="camera-trial-actions"><button type="button" data-camera-demo aria-pressed="false" title="右下角放大鏡頭並畫出追蹤點，錄製展示影片用">展示</button><button type="button" data-camera-panel-toggle aria-expanded="false">展開</button><button type="button" data-camera-stop aria-label="停止本機鏡頭試測">停止</button></div></div><div class="camera-trial-content"><div class="camera-trial-stage"><video id="camera-trial-video" autoplay playsinline muted></video><canvas class="camera-pose-overlay" aria-hidden="true"></canvas><span class="camera-demo-tag"><i></i>MediaPipe 即時追蹤</span><div class="camera-demo-badges" aria-live="polite"><span data-badge="gaze">視線<strong>—</strong></span><span data-badge="posture">坐姿<strong>—</strong></span></div></div><small class="camera-demo-caption">臉部 478 點＋上半身骨架・本機分析，畫面不上傳</small><div class="camera-trial-status" id="camera-trial-status">正在準備模型…</div><div class="camera-trial-metrics"><span>臉部可用<strong id="camera-face-quality">—</strong></span><span>肩部可用<strong id="camera-pose-quality">—</strong></span><span>視線<strong id="camera-head-direction">—</strong></span><span>坐姿<strong id="camera-posture">—</strong></span><span>上半身移動<strong id="camera-body-motion">—</strong></span></div><button type="button" class="camera-recalibrate" data-camera-recalibrate>重新校正</button><div class="camera-trial-phase" id="camera-trial-phase">等候面試事件</div><small>畫面與數值僅留在此瀏覽器・不保存</small></div>';
   const toggle = panel.querySelector("[data-camera-panel-toggle]");
   toggle.addEventListener("click", () => {
     const collapsed = panel.classList.toggle("is-collapsed");
@@ -670,8 +674,27 @@ function ensureCameraPanel() {
   });
   panel.querySelector("[data-camera-stop]").addEventListener("click", () => stopCameraTrial());
   panel.querySelector("[data-camera-recalibrate]").addEventListener("click", () => cameraAnalyzer?.recalibrate?.());
+  panel.querySelector("[data-camera-demo]").addEventListener("click", () => setCameraDemo(!panel.classList.contains("is-demo")));
   document.body.appendChild(panel);
+  let remembered = false;
+  try { remembered = window.localStorage?.getItem(CAMERA_DEMO_KEY) === "on"; } catch {}
+  if (remembered) setCameraDemo(true, { remember: false });
   return panel;
+}
+
+function setCameraDemo(enabled, { remember = true } = {}) {
+  const panel = document.getElementById("camera-trial-panel");
+  if (!panel) return;
+  panel.classList.toggle("is-demo", enabled);
+  const button = panel.querySelector("[data-camera-demo]");
+  button.setAttribute("aria-pressed", String(enabled));
+  button.textContent = enabled ? "一般" : "展示";
+  if (enabled && panel.classList.contains("is-collapsed")) panel.querySelector("[data-camera-panel-toggle]").click();
+  poseOverlay ||= createPoseOverlay(panel.querySelector(".camera-pose-overlay"), panel.querySelector("video"));
+  if (enabled) poseOverlay.start(); else poseOverlay.stop();
+  cameraAnalyzer.setOverlay?.(enabled);
+  if (!remember) return;
+  try { window.localStorage?.setItem(CAMERA_DEMO_KEY, enabled ? "on" : "off"); } catch {}
 }
 
 function updateCameraHud(summary) {
@@ -692,10 +715,14 @@ function updateCameraHud(summary) {
   const latest = summary.latest;
   panel.querySelector("#camera-face-quality").textContent = matching ? percent(matching.faceCoverage) : latest?.faceValid ? "有效" : "等待";
   panel.querySelector("#camera-pose-quality").textContent = matching ? percent(matching.poseCoverage) : latest?.poseValid ? "有效" : "等待";
-  const attentionLabels = { screen: "看向考官", down: "低頭", side: "看旁邊", up: "往上看" };
-  panel.querySelector("#camera-head-direction").textContent = attentionLabels[latest?.attention] || (summary.status === "calibrating" ? "校正中" : "偵測不到臉");
-  const posture = latest?.posture;
-  panel.querySelector("#camera-posture").textContent = !posture?.valid ? "肩膀未入鏡" : posture.slumped ? "下沉" : posture.tilted ? "歪斜" : posture.handNearFace ? "手靠近臉" : "端正";
+  const badges = liveBadges(summary);
+  panel.querySelector("#camera-head-direction").textContent = badges.gaze.value;
+  panel.querySelector("#camera-posture").textContent = badges.posture.value;
+  Object.entries(badges).forEach(([key, badge]) => {
+    const chip = panel.querySelector(`[data-badge="${key}"]`);
+    chip.dataset.tone = badge.tone;
+    chip.querySelector("strong").textContent = badge.value;
+  });
   const motion = latest?.torsoDisplacementPerSecond;
   panel.querySelector("#camera-body-motion").textContent = Number.isFinite(motion) ? `${motion.toFixed(2)} 肩寬/秒` : "累積中";
   const phaseLabels = {
@@ -752,6 +779,7 @@ function stopCameraTrial() {
   cameraTrialGeneration++;
   if (state.cameraAnalysisActive) state.cameraAnalysisSummary = cameraAnalyzer.stop();
   state.cameraAnalysisActive = false;
+  poseOverlay?.update(null);
   state.stream?.getVideoTracks().forEach((track) => track.stop());
   const panel = document.getElementById("camera-trial-panel");
   if (panel) {
@@ -929,6 +957,7 @@ function stopMedia() {
   cameraTrialGeneration++;
   if (state.cameraAnalysisActive) state.cameraAnalysisSummary = cameraAnalyzer.stop();
   state.cameraAnalysisActive = false;
+  poseOverlay?.update(null);
   const cameraPanel = document.getElementById("camera-trial-panel");
   if (cameraPanel) {
     const video = cameraPanel.querySelector("video");
@@ -1092,7 +1121,7 @@ function devicePage() {
   const processingCopy = `${agentDisclosure}${pdfEvidenceDisclosure}；${speechDisclosure}${liveDisclosure}。原始鏡頭畫面不會上傳。`;
   return intro(3, "先確認設備，再進入面試室", `回答會送到面試後端加密暫存；${state.saveHistory ? "本場已選擇保存到登入帳號，預計保留 24 個月，可在帳號頁匯出或刪除。" : "本場預設不保存為個人歷史，結束後依暫存期限清除。"}${processingCopy}`) +
   `<div class="device-grid"><section class="device-preview-card"><div class="device-preview-top"><span class="eyebrow">CAMERA PREVIEW</span><span class="local-only">◈ 僅此裝置</span></div><div class="video-preview ${state.deviceReady ? "has-video" : ""}"><video id="device-video" autoplay playsinline muted></video><div class="camera-framing-guide" aria-hidden="true"><span class="camera-framing-head"></span><span class="camera-framing-upper-body"></span><small>頭部與雙肩保持在框內</small></div><div class="preview-placeholder"><span class="camera-orbit">◉</span><strong>${state.deviceReady ? "鏡頭已準備好" : "鏡頭預覽尚未開啟"}</strong><small>${state.deviceReady ? "離開此頁後會停止鏡頭" : "按下檢查按鈕後，瀏覽器會詢問鏡頭權限"}</small></div><span class="preview-corner">設備檢查</span></div><button class="button button-primary full-button" data-action="camera-device">${state.deviceReady ? "重新檢查鏡頭" : "開啟鏡頭預覽（選用）"} <span>→</span></button>${state.cameraError ? `<p class="pdf-parse-message is-error">${esc(state.cameraError)}</p>` : ""}<button class="skip-check" data-action="skip-devices">略過設備檢查，以文字方式繼續</button></section>
-  <section class="device-status-card"><span class="eyebrow">DEVICE STATUS</span><h3>設備與資料使用</h3>${microphoneControlsHtml()}${liveStatusHtml()}<div class="device-status-row"><span class="device-symbol">▣</span><span><strong>攝影機</strong><small>預設不分析；啟用後只在本機即時估算</small></span><span class="status-pill">選用</span></div>
+  <section class="device-status-card"><span class="eyebrow">DEVICE STATUS</span><h3>設備與資料使用</h3>${microphoneControlsHtml()}${liveStatusHtml()}<label class="toggle-row device-camera-toggle"><span><strong>面試中分析姿態與視線（MediaPipe）</strong><small>選用，只在此電腦分析，畫面不上傳。需先開啟鏡頭預覽；進面試室後，按右上角鏡頭面板的「展示」可放大並顯示追蹤點。</small></span><input type="checkbox" data-preference="cameraAnalysisConsent" ${state.cameraAnalysisConsent ? "checked" : ""} ${state.preferencesReady ? "" : "disabled"} /><i></i></label>
   ${permissionSummary()}
   <div class="device-info-note"><span>i</span><p>${state.agentMode === "gemini-api" ? (state.health?.geminiApiConfigured ? `教授與復盤使用 ${esc(state.health.model || "Gemini API")}。` : "Gemini API key 尚未設定；面試與 PDF 解析目前無法呼叫模型。") : state.agentMode === "cli" ? "教授與復盤使用 Google Gemini。" : "目前使用本機示範 Agent。"}${localSpeech ? "繁中語音辨識與教授語音已就緒。" : state.speechStatus?.provider === "gemini" ? "語音服務使用 Gemini API。" : "語音辨識／合成未啟用時仍可使用文字回答。"}</p></div><div class="device-profile-summary"><span class="mini-school-mark">F</span><div><strong>${profile().school}・${profile().dept}</strong><small>${activePeople().map((x) => x.name).join("・")} ・ ${state.config.duration} 分鐘</small></div><button data-action="step" data-page="setup">編輯</button></div></section></div>
   <div class="form-footer"><button class="button button-quiet" data-action="step" data-page="setup" ${state.sessionStarting ? "disabled" : ""}>← 返回設定</button><button class="button button-primary" data-action="step" data-page="interview" ${state.sessionStarting ? "disabled aria-busy=\"true\"" : startRestriction() ? "disabled" : ""}>${state.sessionStarting ? "正在準備面試室…" : "進入面試室"} ${state.sessionStarting ? "" : "<span>→</span>"}</button></div>`;
@@ -1853,21 +1882,10 @@ function markVoiceStart() {
   state.cameraPhase = "candidate_answer";
   reportCandidateActivity();
 }
-// Interim words go into the answer box without becoming a typed draft, so
-// typing over them takes the answer over as text.
-function showLiveTranscript(text) {
-  state.liveTranscript = text;
-  const input = app.querySelector('[data-form="answer"] textarea');
-  if (!input || state.draft.trim()) return;
-  input.value = text;
-  input.classList?.toggle("is-live-transcript", Boolean(text));
-}
-function clearLiveTranscript() {
-  const input = app.querySelector('[data-form="answer"] textarea');
-  if (input && state.liveTranscript && input.value === state.liveTranscript) input.value = "";
-  input?.classList?.remove("is-live-transcript");
-  state.liveTranscript = "";
-}
+// Recognized words stay out of the answer box: the professor reads past
+// recognition errors, but a student seeing them would think they were misheard.
+function showLiveTranscript(text) { state.liveTranscript = text; }
+function clearLiveTranscript() { state.liveTranscript = ""; }
 // The same question listens once more by itself before asking for the retry button.
 function resumeAfterVoiceMiss(capture, retryable, message) {
   const retryKey = `${capture.turnId}:${capture.eventSeq}`;
@@ -2029,7 +2047,7 @@ async function finishStreamingCapture(capture) {
     if (turn) turn.answerText = text;
     state.transcribing = false;
     clearLiveTranscript();
-    notify("已收到語音回答：" + text.slice(0, 45));
+    notify("已收到你的回答");
     render();
   } catch (error) {
     if (!sameSession()) return;
@@ -2082,7 +2100,7 @@ function startVoiceCapture() {
         const turn = state.backendTurns.find((item) => item.turnId === capture.turnId);
         if (turn) turn.answerText = response.transcript;
         state.transcribing = false;
-        notify("已收到語音回答：" + response.transcript.slice(0, 45));
+        notify("已收到你的回答");
         render();
       } catch (error) {
         if (capture.generation !== voiceRequestGeneration || state.sessionId !== capture.sessionId || state.page !== "interview") return;

@@ -175,6 +175,24 @@ function splitReviewChunks(turns, assessments, maxPromptDataChars = 14000, maxTu
   return chunks;
 }
 
+function introductionAssessment(role, session) {
+  const span = practiceBudget(session).totalSeconds <= 180 ? "三十秒" : "一分鐘";
+  return {
+    agentId: role.id,
+    assessment: "開場問候並請學生自我介紹。",
+    rubricDimension: role.dimension,
+    evidenceRefs: [],
+    candidateQuestion: `同學你好，我是${role.name}。先請你用${span}簡單自我介紹，姓名和就讀學校不用說。`,
+    questionIntent: "讓學生自行挑重點，建立後續追問的線索。",
+    questionFocus: "introduction",
+    dialogueAction: "opening",
+    sourceRefs: [],
+    confidence: "low",
+    limits: ["本題是練習題，不代表正式面試題目。"],
+    relevance: 0.5,
+  };
+}
+
 export class InterviewOrchestrator {
   constructor({ store, agentService, coordinator, speechAdapter, reportRepository, interviewHistoryRepository, getProfile, config, liveVoice = null }) {
     this.liveVoice = liveVoice;
@@ -918,15 +936,16 @@ export class InterviewOrchestrator {
       askedQuestions: [],
       profile: session.profileSnapshot,
     };
-    const candidates = [await this.agentService.assess(openingRole.id, openingContext)];
+    // The greeting is fixed text, so it skips the model call (7-17 s through the CLI).
+    const candidates = [openingPlan.id === "introduction" ? introductionAssessment(openingRole, session) : await this.agentService.assess(openingRole.id, openingContext)];
     let selected = this.coordinator.select(candidates, session.roster, [], session.seed);
     if (!selected) {
       candidates.push(await this.agentService.assess(openingRole.id, { ...openingContext, retryReason: "上次開場題太長或違反匿名規則（提及或詢問學生就讀的學校），請重新提出。" }));
       selected = this.coordinator.select(candidates.slice(-1), session.roster, [], session.seed);
     }
-    this.#recordTiming(session, "opening_question", started, { modelCalls: candidates.length });
+    this.#recordTiming(session, "opening_question", started, { modelCalls: openingPlan.id === "introduction" ? 0 : candidates.length });
     if (!selected) {
-      const fallback = { ...candidates.at(-1), candidateQuestion: "你好，可以先用一分鐘簡單介紹一下自己嗎？", questionFocus: "introduction", dialogueAction: "opening", sourceRefs: [] };
+      const fallback = introductionAssessment(openingRole, session);
       selected = { roleId: openingRole.id, speakerId: openingRole.speakerId, utterance: fallback.candidateQuestion, topic: openingRole.dimension, assessment: fallback };
     }
     const turn = { turnId: openingTurnId, threadId: openingTurnId, threadDepth: 0, roleId: selected.roleId, speakerId: selected.speakerId, questionText: selected.utterance, questionFocus: selected.assessment.questionFocus, answerText: "", sourceRefs: selected.assessment.sourceRefs, followUps: [], createdAt: new Date().toISOString() };
@@ -978,7 +997,7 @@ export class InterviewOrchestrator {
       turns: compactTurns(session.turns, 3, answeredTurn.turnId),
       askedQuestions: session.turns.slice(-8).map((turn) => String(turn.questionText || "").slice(0, 260)),
       profile: session.profileSnapshot,
-      conversation: { ...conversation, ...(threadExhausted ? { reason: "thread_follow_up_limit" } : afterIntroduction ? { reason: "after_introduction" } : {}) },
+      conversation: { ...conversation, ...(threadExhausted ? { reason: "thread_follow_up_limit" } : afterIntroduction ? { reason: "after_introduction", nextAngle: session.openingPlan?.nextAngle } : {}) },
     };
     const started = performance.now();
     const role = this.coordinator.chooseRole(session.roster, session.turns, answeredTurn.answerText, context.task);
