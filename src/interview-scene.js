@@ -1,6 +1,11 @@
 import * as THREE from "/vendor/three.module.js";
 import { GLTFLoader } from "/vendor/addons/loaders/GLTFLoader.js";
 
+// v2 characters are authored in metres, already seated with feet on the ground.
+// Keep a fixed uniform conversion; a posed bounding box is not a body scale.
+export const AVATAR_PLACEMENT = Object.freeze({ scale: 2, seatHeight: 0.92, rootZ: -0.85, tableHeight: 1.50 });
+export const AVATAR_CLIPS = Object.freeze({ idle: "Idle", listening: "Listening", reading_notes: "ReadingNotes", speaking: "SpeakingGesture", follow_up: "FollowUp", considering: "Thinking" });
+
 const COLORS = {
   wall: 0xe9e1d5,
   wood: 0x78543c,
@@ -138,26 +143,25 @@ function addRoom(scene) {
 
   // Long meeting table; the apron and front lip occlude seated lower bodies.
   const top = standard(0x79523a, 0.43), apron = standard(0x694833), leg = standard(0x583d2d);
-  block(scene, top, [0, 1.52, 0.40], [12.1, 0.18, 2.05], "meeting-table-top");
-  block(scene, apron, [0, 1.22, 1.29], [11.85, 0.43, 0.16], "table-apron");
-  for (const x of [-5.3, 5.3]) block(scene, leg, [x, 0.61, 0.40], [0.24, 1.05, 1.55], "table-leg");
-  block(scene, lightWood, [0, 1.615, -0.15], [11.9, 0.025, 0.03]);
+  block(scene, top, [0, 1.44, 0.55], [12.1, 0.12, 1.7], "meeting-table-top");
+  block(scene, apron, [0, 1.20, 1.32], [11.85, 0.36, 0.12], "table-apron");
+  for (const x of [-5.3, 5.3]) block(scene, leg, [x, 0.70, 0.55], [0.24, 1.40, 1.35], "table-leg");
+  block(scene, lightWood, [0, 1.505, -0.22], [11.9, 0.01, 0.03]);
   // Small paper folders rest on top, in front of each seat.
   for (const x of [-3.0, 0, 3.0]) {
-    block(scene, standard(COLORS.paper), [x, 1.625, 0.05], [0.72, 0.025, 0.52], "interviewer-notes");
-    block(scene, standard(0xd0c8bb), [x, 1.642, 0.05], [0.48, 0.006, 0.012]);
-    block(scene, standard(0xb6a895), [x, 1.642, 0.12], [0.54, 0.006, 0.01]);
+    block(scene, standard(COLORS.paper), [x, 1.512, 0.05], [0.72, 0.024, 0.52], "interviewer-notes");
+    block(scene, standard(0xd0c8bb), [x, 1.527, 0.05], [0.48, 0.006, 0.012]);
+    block(scene, standard(0xb6a895), [x, 1.527, 0.12], [0.54, 0.006, 0.01]);
   }
 }
 
 function addChair(scene, x) {
   const upholstery = standard(0x343c42, 0.9), frame = standard(0x504c46, 0.52, { metalness: 0.18 });
-  block(scene, upholstery, [x, 1.92, -0.92], [0.96, 1.52, 0.19], "interviewer-chair-back");
-  block(scene, upholstery, [x, 1.24, -0.62], [0.94, 0.19, 0.90], "interviewer-chair-seat");
-  block(scene, frame, [x - 0.49, 1.58, -0.55], [0.075, 0.82, 0.72]);
-  block(scene, frame, [x + 0.49, 1.58, -0.55], [0.075, 0.82, 0.72]);
-  block(scene, frame, [x, 0.95, -0.62], [0.08, 0.56, 0.10]);
-  block(scene, frame, [x, 0.68, -0.62], [0.68, 0.07, 0.68]);
+  block(scene, upholstery, [x, 1.54, -1.34], [0.98, 1.28, 0.12], "interviewer-chair-back");
+  block(scene, upholstery, [x, 0.85, -0.87], [0.98, 0.14, 0.92], "interviewer-chair-seat");
+  for (const side of [-1, 1]) {
+    for (const depth of [-1.21, -0.53]) block(scene, frame, [x + side * 0.38, 0.40, depth], [0.05, 0.80, 0.05], "interviewer-chair-leg");
+  }
 }
 
 function makeGlasses(parent, color = 0x363b3b) {
@@ -199,7 +203,7 @@ function addHead(parent, id, palette) {
     orb(head, hair, [0.28, 0.025, -0.02], [0.09, 0.25, 0.25], "temple-right");
     orb(head, hair, [0.12, 0.21, 0.17], [0.22, 0.115, 0.13], "parted-fringe").rotation.z = 0.15;
   }
-  if (id !== "portfolio") makeGlasses(head, id === "technical" ? 0x313a40 : 0x44423f);
+  if (id === "technical") makeGlasses(head, 0x313a40);
   return { head, mouth };
 }
 
@@ -368,37 +372,22 @@ export class InterviewScene {
           return;
         }
         const gltf = await this.loader.loadAsync(path);
-        const modelBounds = new THREE.Box3().setFromObject(gltf.scene);
-        const height = Math.max(0.01, modelBounds.max.y - modelBounds.min.y);
-        // These are full-body rigged characters authored at the same scale, with
-        // the hips aligned to the independent chair seat behind the table.
-        const scale = 2.0 / height;
         const avatar = new THREE.Group();
         avatar.name = `${id}-rigged-interviewer-object`;
-        gltf.scene.scale.setScalar(scale);
-        gltf.scene.position.set(
-          -(modelBounds.min.x + modelBounds.max.x) * 0.5 * scale,
-          0,
-          -(modelBounds.min.z + modelBounds.max.z) * 0.5 * scale,
-        );
-        gltf.scene.updateMatrixWorld(true);
-        let pelvis = null;
+        gltf.scene.scale.setScalar(AVATAR_PLACEMENT.scale);
+        gltf.scene.position.set(0, 0, AVATAR_PLACEMENT.rootZ);
         gltf.scene.traverse((node) => {
-          if (node.isBone && /^(pelvis|hips)$/i.test(node.name)) pelvis = node;
+          if (node.isMesh) { node.castShadow = true; node.receiveShadow = true; }
         });
-        if (pelvis) {
-          const pelvisHeight = pelvis.getWorldPosition(new THREE.Vector3()).y;
-          gltf.scene.position.y += 1.335 - pelvisHeight;
-        } else {
-          gltf.scene.position.y = 1.335 - 0.055 * scale;
-        }
         avatar.add(gltf.scene);
         const fallback = this.characters.get(id);
         if (!fallback) return;
         avatar.position.copy(fallback.position);
         avatar.visible = this.actors.has(id);
         const mixer = new THREE.AnimationMixer(gltf.scene);
-        const actions = new Map(gltf.animations.map((clip) => [clip.name.toLowerCase(), mixer.clipAction(clip)]));
+        const missing = Object.values(AVATAR_CLIPS).filter((name) => !gltf.animations.some((clip) => clip.name === name));
+        if (missing.length) throw new Error(`Interviewer ${id} is missing animation clips: ${missing.join(", ")}`);
+        const actions = new Map(gltf.animations.map((clip) => [clip.name, mixer.clipAction(clip)]));
         avatar.userData = {
           id,
           kind: "rigged",
@@ -407,7 +396,7 @@ export class InterviewScene {
           phase: fallback.userData.phase,
           mixer,
           actions,
-          clips: gltf.animations.map((clip) => clip.name.toLowerCase()),
+          clips: gltf.animations.map((clip) => clip.name),
           activeClip: "",
         };
         this.scene.add(avatar);
@@ -416,6 +405,7 @@ export class InterviewScene {
         this.characters.set(id, avatar);
         if (this.actors.has(id)) this.actors.set(id, avatar);
         this.playRiggedState(avatar, avatar.userData.state);
+        mixer.update(0);
         this.positionActors();
       } catch (error) {
         console.warn(`Unable to load 3D interviewer asset: ${path}`, error);
@@ -429,18 +419,7 @@ export class InterviewScene {
 
   playRiggedState(actor, state) {
     if (actor.userData.kind !== "rigged") return;
-    const clipHints = {
-      speaking: [/speaking.*gesture/, /gesture.*speak/, /speak/, /talk/, /ask/],
-      follow_up: [/follow.?up/, /point/, /challenge/, /ask/, /speak/, /talk/],
-      reading_notes: [/read/, /note/, /write/],
-      considering: [/think/, /consider/, /listen/, /idle/],
-      listening: [/listen/, /idle/, /breath/],
-      idle: [/idle/, /breath/],
-    };
-    const wanted = clipHints[state] || clipHints.idle;
-    const fallback = state === "follow_up" ? clipHints.speaking : clipHints.listening;
-    const clipName = wanted.flatMap((pattern) => actor.userData.clips.filter((name) => pattern.test(name)))[0]
-      || fallback.flatMap((pattern) => actor.userData.clips.filter((name) => pattern.test(name)))[0];
+    const clipName = AVATAR_CLIPS[state] || AVATAR_CLIPS.idle;
     if (!clipName || clipName === actor.userData.activeClip) return;
     const next = actor.userData.actions.get(clipName);
     if (!next) return;

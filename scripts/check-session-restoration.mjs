@@ -1,0 +1,17 @@
+import assert from "node:assert/strict";
+import {randomBytes} from "node:crypto";
+import {AppDatabase} from "../server/database.js";
+import {SessionStore} from "../server/session-store.js";
+import {encryptText,decryptText} from "../server/crypto-utils.js";
+const database=new AppDatabase(":memory:");const applicationKey=randomBytes(32);
+const options={database,applicationKey,sessionTtlMs:3600000};
+const store=new SessionStore(options);
+store.create({id:"restore-test",startedAt:new Date().toISOString(),status:"active",events:[],turns:[],audioBySequence:new Map(),nudgeUsedForTurn:new Set(),guestOwnerHash:"synthetic-owner"});
+const row=database.connection.prepare("SELECT payload_json FROM interview_sessions WHERE session_id='restore-test'").get();
+const payload=JSON.parse(decryptText(applicationKey,"interview-session",JSON.parse(row.payload_json).encryptedPayload));
+assert.equal(typeof payload,"object","Payload must not be JSON-encoded twice");
+assert.equal(new SessionStore(options).get("restore-test").id,"restore-test");
+const legacy=JSON.stringify({encryptedPayload:encryptText(applicationKey,"interview-session",JSON.stringify(JSON.stringify(payload)))});
+database.connection.prepare("UPDATE interview_sessions SET payload_json=? WHERE session_id='restore-test'").run(legacy);
+assert.equal(new SessionStore(options).get("restore-test").id,"restore-test","Restore older double-encoded rows");
+database.close();console.log("PASS: session restoration and backward compatibility");
