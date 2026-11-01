@@ -5,6 +5,7 @@ import { createPracticeProfile, publicProfile } from "./profiles.js";
 import { appendSetCookie } from "./auth-service.js";
 import { createHash } from "node:crypto";
 import { acceptWebSocket, rejectUpgrade } from "./websocket.js";
+import { driveImportStatus, driveProcessingBlock } from "./drive-import.js";
 
 export function portfolioBatchScope(batchId, authContext) {
   const owner = authContext?.userId || authContext?.guestOwnerHash;
@@ -207,6 +208,7 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
             liveModel: config.agentMode === "cli" ? config.liveModelSlug : config.modelSlug,
             geminiApiConfigured: Boolean(config.geminiApiKey),
             portfolioParsingAvailable: portfolioParsingAvailable(),
+            driveImport: driveImportStatus(config),
             speech: orchestratorSpeech(orchestrator),
             liveVoice: orchestrator.liveVoice?.status() || { enabled: false, model: null, mode: "off" },
             profiles: profileList.length,
@@ -250,6 +252,11 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
           const batchScopeId = input.batchId ? portfolioBatchScope(input.batchId, authContext) : undefined;
           if (input.batchId && !batchScopeId) return json(response, 400, { error: { code: "INVALID_BATCH", message: "備審整理工作格式無效，請重新整理。" } });
           if (input.consent !== true) return json(response, 400, { error: { code: "PDF_CONSENT_REQUIRED", message: config.agentMode === "cli" ? "請先同意將 PDF 傳至 VivaPrep，並交由 Google Gemini 整理。" : "請先同意將所選 PDF 傳送至 Google Gemini API 解析。" } });
+          if (input.source === "drive") {
+            const blocked = driveProcessingBlock(config);
+            if (blocked) return json(response, 409, { error: { code: "DRIVE_PROCESSING_BLOCKED", message: blocked.message } });
+            if (input.driveConsent !== true) return json(response, 400, { error: { code: "DRIVE_CONSENT_REQUIRED", message: "請先在資料使用設定允許 Google Drive 匯入。" } });
+          }
           const profile = input.customProfile
             ? createPracticeProfile(input.customProfile)
             : getProfiles().find((item) => item.id === input.profileId);
@@ -284,6 +291,10 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
         }
         if (method === "POST" && pathname === "/api/sessions") {
           const input = await readJson(request, config.maxRequestBytes);
+          if (input.driveDerived === true) {
+            const blocked = driveProcessingBlock(config);
+            if (blocked) return json(response, 409, { error: { code: "DRIVE_PROCESSING_BLOCKED", message: blocked.message } });
+          }
           const result = await orchestrator.createSession(input, authContext);
           json(response, 201, result);
           return;

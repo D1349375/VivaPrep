@@ -318,3 +318,12 @@
 - **開場不呼叫模型：**先讓模型生成問候句，5 次都符合要求，但經 CLI 要等 7.3～16.7 秒。內容幾乎固定，回合制改用固定文字（3 分鐘場次說三十秒），開場降到 14～76 毫秒，也不受 Agent 失敗影響。Gemini Live 仍由模型依指示說出。
 - **驗收：**更新 `check-streaming-recognition`、`check-gemini-live-ui`、`check-gemini-live-voice`、`check-input-workflows`、`check-topic-threads`、`check-opening-variety`。內建預覽面板以假鏡頭確認預覽鏡像、開關可切換且不中斷預覽。CLI 真實模型文字模式量 3 次：開場 14～76 毫秒；回答自介後到第二題 9.7～16.4 秒（不含語音合成，當時可用記憶體約 0.7 GB）。第二題現在是該場第一次模型呼叫，尚未和改動前同條件比較。
 - **界線：**語音與 Live 開場尚未實測。回答結束判斷（停頓思考會被送出）尚未修改，使用者要再權衡反應速度；若改動，簡報第 6 頁的延遲數字也要重量。本機 Whisper 與 4180 同時載入時 `check-local-stt` 會載入失敗，4180 關閉時通過。
+
+## 2026-11-01：備審資料庫接 Google Drive 匯入
+
+- **原因：**Gemini 組決賽有 25% 看 Google 技術整合，Workspace 目前完全沒有實作，初賽文件也已承諾決賽前導入 Drive。
+- **設計：**OAuth（GIS token model）、Picker、`files.get` 下載全在瀏覽器。權杖只留在當次匯入的區域變數，不保存、不經後端，所以伺服器沒有 Google 使用者憑證要保管，也不呼叫 Drive API。下載後變成一般的 `File`，走原本的「留在瀏覽器 → 按整理才送出 → 核對主張」流程。範圍只用 `drive.file`，並設 `include_granted_scopes: false`。
+- **不進免費層：**沒有 API 能查 key 的層級，改由管理者到 AI Studio 確認後設 `VIVAPREP_GEMINI_PAID_TIER=confirmed`；未設定、CLI 或示範模式時整個功能停用，後端也會在呼叫模型前回 409。主張之後還會進面試，所以文件來源會記在瀏覽器資料庫，建場次時一併把關，否則日後切到 CLI 或免費層，Drive 內容就會從這裡漏出去。`GEMINI_LIVE_API_KEY` 可能是另一個專案，所以這個旗標涵蓋所有 Gemini key。
+- **其他取捨：**Picker key 會送到瀏覽器，與 Gemini key 相同時直接停用，避免把 Gemini key 外露。Google 腳本只在使用者同意後才載入，並在按鈕按下前預載，因為彈出視窗要在使用者手勢內開啟。每次匯入都走帳號選擇（`select_account`），避免選錯 Drive。檔名、類型與大小以 Drive `files.get` 為準，不用 Picker 回傳值，因為官方頁面沒有列出後者的欄位。撤回 Drive 同意時，尚未送出的 Drive 檔案會從記憶體移除。
+- **驗收：**新增 `check-drive-import`（啟用條件矩陣、免費層與 CLI 在模型呼叫前被拒、Drive 專用同意、只用 `drive.file`、權杖只送 Drive API、取消／彈窗被擋／超過大小／非 PDF／無下載權限、未設定時本機上傳與解析正常）。瀏覽器實測：未設定時按鈕停用並顯示原因，本機上傳可用；用假設定值啟用時，同意前不載入任何 Google 腳本，同意後載入真正的 GIS 與 Picker。
+- **界線：**真實的 Google 登入、Picker 選檔與下載尚未走過，要等使用者建好 OAuth 用戶端並確認付費層。OAuth 仍是「測試中」，授權 7 天失效，只有名單內帳號能用。

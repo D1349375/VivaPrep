@@ -5,6 +5,7 @@ import { buildPostureFeedback } from "./posture-feedback.js";
 import { VoiceActivityDetector } from "./voice-activity.js";
 import { LiveAudioLink } from "./live-audio.js";
 import { PORTFOLIO_PARSER_VERSION, librarySnapshot, readPortfolioLibrary, writePortfolioLibrary, deletePortfolioLibrary, portfolioFileHash } from "./portfolio-library.js";
+import { DriveImportCancelled, createDriveImporter } from "./drive-import.js";
 
 const app = document.getElementById("app");
 const toast = document.getElementById("toast");
@@ -29,7 +30,7 @@ const steps = [
   ["interview", "模擬面試", "進入面試室"], ["review", "逐題復盤", "下一輪練習"],
 ];
 const state = {
-  page: "home", profileId: "fcu-general", customProfiles: [], customProfileOpen: false, portfolioFiles: [], claimsOrigin: "sample", resumeConsent: false, resumeParsing: false, resumeParseMessage: "", resumeParseError: false,
+  page: "home", profileId: "fcu-general", customProfiles: [], customProfileOpen: false, portfolioFiles: [], claimsOrigin: "sample", resumeConsent: false, driveConsent: false, driveImporting: false, resumeParsing: false, resumeParseMessage: "", resumeParseError: false,
   claims: [
     { id: "c1", text: "我在校園借閱系統專題中負責資料處理與搜尋功能。" },
     { id: "c2", text: "我透過自學演算法，嘗試用動態規劃改善問題解法。" },
@@ -96,9 +97,14 @@ const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt
 const usesExternalAgent = () => state.agentMode === "cli" || state.agentMode === "gemini-api";
 const agentLabel = () => state.agentMode === "gemini-api" ? "Gemini API" : state.agentMode === "cli" ? "Gemini" : state.agentMode === "mock" ? "本機示範" : "服務連線中";
 const portfolioParsingAvailable = () => state.health?.portfolioParsingAvailable === true;
-const preferenceFields = ["consentModel", "consentAudio", "liveVoiceConsent", "resumeConsent", "confirmClaims", "cameraAnalysisConsent", "cameraMetricsConsent", "saveHistory", "savePortfolio"];
+const driveStatus = () => state.health?.driveImport || { enabled: false, processingAllowed: false, message: "正在確認 Google Drive 匯入狀態。" };
+const driveImportAllowed = () => driveStatus().enabled && state.driveConsent && state.resumeConsent && state.consentModel;
+// Claims from Drive may only reach models that passed the server's Drive check.
+const driveClaimsInUse = () => state.confirmClaims && selectedPortfolioClaims().some((claim) => state.portfolioFiles.find((item) => item.id === claim.documentId)?.source === "drive");
+const preferenceFields = ["consentModel", "consentAudio", "liveVoiceConsent", "resumeConsent", "driveConsent", "confirmClaims", "cameraAnalysisConsent", "cameraMetricsConsent", "saveHistory", "savePortfolio"];
 const portfolioScope = () => "portfolio." + (state.auth?.user?.userId || "guest");
 let libraryLoadGeneration = 0;
+let driveImporter = null;
 async function loadPortfolioLibrary() {
   const generation = ++libraryLoadGeneration;
   const scope = portfolioScope();
@@ -171,6 +177,7 @@ function loadPreferences() {
     else if (saved) state.preferencesMessage = "資料處理服務已變更，請在設定重新選擇授權。";
   } catch { state.preferencesMessage = "瀏覽器無法讀取設定，請重新選擇授權。"; }
   if (!state.consentModel) { state.resumeConsent = false; state.cameraMetricsConsent = false; }
+  if (!state.resumeConsent) state.driveConsent = false;
   if (!state.consentModel || !state.consentAudio) state.liveVoiceConsent = false;
   if (!state.cameraAnalysisConsent) state.cameraMetricsConsent = false;
   if (!state.auth?.authenticated) state.saveHistory = false;
@@ -186,6 +193,7 @@ function persistPreferences() {
 function startRestriction() {
   if (!state.authReady || !state.preferencesReady || !["mock", "cli", "gemini-api"].includes(state.agentMode)) return "正在確認服務與設定，請稍候。";
   if (usesExternalAgent() && !state.consentModel) return "尚未允許 Agent 處理對話，請先到設定開啟。";
+  if (driveClaimsInUse() && !driveStatus().processingAllowed) return "這場選用的文件來自 Google Drive，只能交給 Gemini API 付費層處理；請取消勾選該文件，或等服務設定完成。";
   if (state.agentMode === "gemini-api" && !state.health?.geminiApiConfigured) return "Gemini 服務尚未設定完成。";
   if (state.config.mode === "voice" && !state.consentAudio) return "尚未允許語音處理，請到設定開啟，或改用文字回答。";
   if (state.config.mode === "voice" && !state.speechStatus?.available) return "語音服務尚未準備好，請改用文字回答。";
@@ -212,6 +220,7 @@ function settingsPage() {
   ${row("consentAudio", "允許語音辨識與教授語音", audioCopy + " 未允許時只能使用文字回答。")}
   ${row("liveVoiceConsent", "暖身對談使用 Gemini Live 即時對談", liveCopy, liveVoiceModel() === "off" || !state.consentAudio || !state.consentModel)}
   ${row("resumeConsent", "允許整理我選擇的備審 PDF", (state.agentMode === "cli" ? "PDF 送至面試後端，由 Google Gemini 整理成附頁碼的候選主張。" : "PDF 送至 Google Gemini API 整理。") + " 每次按整理才會傳送；需同時允許 Agent。未允許時可手動編輯主張。", !state.consentModel)}
+  ${row("driveConsent", "允許從 Google 雲端硬碟匯入我選取的 PDF", driveStatus().enabled ? "只使用 Google 的 drive.file 權限：VivaPrep 只能讀取你在 Google 選擇視窗中親自選取的 PDF，看不到雲端硬碟的其他檔案。存取權杖只留在這個分頁，匯入後就丟棄，不會送到 VivaPrep 後端。PDF 先留在此瀏覽器，按整理才送至後端擷取文字，再交給 Google Gemini API 付費層整理；原檔處理後即釋放，不保存。付費層不會用這些內容改進 Google 的產品，VivaPrep 也不會用來建立、訓練或改進通用 AI 模型；使用這些主張的面試同樣只交給付費層。Google 僅在有限期間內記錄提示與回應，用於偵測違規與法律需求。可隨時到 Google 帳戶的「第三方連結」移除授權。需同時允許 PDF 整理。" : driveStatus().message + " 本機上傳不受影響。", !driveStatus().enabled || !state.resumeConsent)}
   ${row("confirmClaims", "允許面試使用目前編輯的備審主張", "開始前請回查主張、檔名、頁碼與摘錄。啟用後使用當時畫面中的主張；關閉後只練習校系與通用問題。")}
   ${row("savePortfolio", "在此瀏覽器保存備審資料庫", "只保存檔名、主張、頁碼與短摘錄，不保存原始 PDF。下次可直接選用；訪客與帳號分開保存，不會同步其他裝置。共用電腦不建議啟用。關閉後會刪除已保存的資料。")}
   ${row("cameraAnalysisConsent", "啟用本機鏡頭分析（選用）", "只在此電腦即時分析，原始畫面、逐影格資料與臉部特徵不會上傳或保存。")}
@@ -219,7 +228,7 @@ function settingsPage() {
   ${row("saveHistory", "保存之後的練習到私人帳號歷史", state.auth?.authenticated ? "預計保留 24 個月，可在帳號頁匯出或刪除。匿名分享仍由每篇內容預覽後送出。" : "登入後才能啟用；訪客場次只加密暫存。", !state.auth?.authenticated)}
   </section><p class="settings-save-message" role="status">${esc(state.preferencesMessage || "目前尚未保存授權選擇。")}</p><div class="permission-summary"><strong>功能限制</strong><p>PDF 與鏡頭摘要需要 Agent 授權；語音未授權可改用文字。設備權限仍由瀏覽器管理。更換模型接入方式或語音處理服務時會重新確認。</p></div><div class="form-footer"><button class="button button-quiet" data-action="reset-permissions">關閉所有授權</button><button class="button button-primary" data-action="settings-done">返回練習流程 →</button></div>`;
 }
-function selectPortfolioFiles(files) {
+function selectPortfolioFiles(files, source = "local") {
   if (!state.libraryReady) return notify("正在載入備審資料庫，請稍候。");
   if (state.resumeParsing) return notify("PDF 正在解析，完成後再加入檔案。");
   const errors = [];
@@ -227,11 +236,40 @@ function selectPortfolioFiles(files) {
     if (!/\.pdf$/i.test(file.name) || !file.size || file.size > 8 * 1024 * 1024) { errors.push(`${file.name}：需為非空白 PDF，每份不超過 8 MB。`); continue; }
     if (state.portfolioFiles.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified && (item.file || item.parserVersion === PORTFOLIO_PARSER_VERSION))) continue;
     if (state.portfolioFiles.length >= 5 || state.portfolioFiles.reduce((sum, item) => sum + item.size, 0) + file.size > 24 * 1024 * 1024) { errors.push("最多 5 份 PDF，合計不超過 24 MB。"); continue; }
-    state.portfolioFiles.push({ id: crypto.randomUUID(), name: file.name, size: file.size, lastModified: file.lastModified, file, selected: true, status: "pending", message: "尚未傳送" });
+    state.portfolioFiles.push({ id: crypto.randomUUID(), name: file.name, size: file.size, lastModified: file.lastModified, file, selected: true, status: "pending", message: source === "drive" ? "來自 Google Drive・尚未傳送" : "尚未傳送", ...(source === "drive" ? { source } : {}) });
   }
   state.resumeParseMessage = errors.join(" ") || "新增檔案仍留在此瀏覽器；同意並按下解析後才會傳送。";
   state.resumeParseError = errors.length > 0;
   render();
+}
+function dropPendingDriveFiles() {
+  if (state.resumeParsing) return;
+  state.portfolioFiles = state.portfolioFiles.filter((item) => item.source !== "drive" || item.status === "done");
+}
+async function importFromDrive() {
+  if (state.driveImporting || state.resumeParsing || !state.libraryReady) return;
+  if (!driveImportAllowed()) return notify(driveStatus().enabled ? "請先在資料使用設定允許 Agent、PDF 整理與 Google Drive 匯入。" : driveStatus().message);
+  const remaining = 5 - state.portfolioFiles.length;
+  if (remaining <= 0) return notify("最多 5 份 PDF，請先移除不需要的文件。");
+  const scope = portfolioScope();
+  state.driveImporting = true;
+  state.resumeParseMessage = "請在 Google 視窗中登入並選取 PDF。";
+  state.resumeParseError = false;
+  render();
+  try {
+    driveImporter ||= createDriveImporter(driveStatus());
+    const { files, errors } = await driveImporter.importPdfs({ maxFiles: remaining });
+    if (scope !== portfolioScope()) return;
+    state.driveImporting = false;
+    selectPortfolioFiles(files, "drive");
+    if (errors.length) { state.resumeParseMessage = errors.join(" "); state.resumeParseError = true; }
+  } catch (error) {
+    state.resumeParseMessage = error instanceof DriveImportCancelled ? "已取消 Google Drive 匯入。" : error.message;
+    state.resumeParseError = !(error instanceof DriveImportCancelled);
+  } finally {
+    state.driveImporting = false;
+    render();
+  }
 }
 function removePortfolioFile(id) {
   if (state.resumeParsing) return;
@@ -287,6 +325,8 @@ async function parsePortfolioPdf() {
         pdfBase64: await fileToBase64(item.file),
         consent: true,
         batchId,
+        source: item.source,
+        driveConsent: item.source === "drive" ? state.driveConsent : undefined,
       }),
     });
     if (scope !== portfolioScope()) { item.file = null; break; }
@@ -1027,11 +1067,18 @@ function profilePage() {
   `<div class="two-column-layout"><div class="profile-list">${cards}${state.customProfileOpen ? customProfileForm() : `<button class="profile-add-card" data-action="custom-profile"><span>＋</span><span><strong>找不到你的校系？</strong><small>建立一個一般模擬情境</small></span><i>↗</i></button>`}</div><aside class="profile-detail-card"><div class="detail-top"><span class="detail-kicker">情境摘要</span><span class="confidence-chip">${esc(p.confidence)}</span></div><h3>${esc(p.school)}<br /><em>${esc(p.dept)}</em></h3><div class="detail-route"><span>招生管道</span><strong>${esc(p.route)}</strong></div><div class="detail-route"><span>面試形式</span><strong>${esc(p.interviewFormat || "一般 panel 模擬")}</strong></div><div class="detail-rule"><span>✳</span><p>依目前可用來源與備審主張練習作品追問和學科概念。</p></div><div class="source-note"><span class="source-dot"></span><div><strong>資料狀態：${esc(statusText)}</strong><small>${esc(contextText)}</small></div></div><div class="detail-footer">最後核對 <strong>${esc(p.lastVerifiedAt || "尚未核對")}</strong></div></aside></div>
   <div class="form-footer"><button class="button button-quiet" data-action="home">← 返回總覽</button><button class="button button-primary" data-action="step" data-page="resume">下一步：整理備審 <span>→</span></button></div>`;
 }
+function driveImportHtml() {
+  const status = driveStatus();
+  const allowed = driveImportAllowed();
+  const note = !status.enabled ? status.message + " 本機上傳不受影響。" : allowed ? "只會讀取你在 Google 視窗中選取的 PDF；匯入後先留在此瀏覽器，按下整理才會傳送。" : "需先到資料使用設定允許 Agent、PDF 整理與 Google Drive 匯入。";
+  return `<div class="drive-import"><button class="button button-outline full-button" data-action="drive-import" ${!allowed || state.driveImporting || state.resumeParsing || !state.libraryReady ? "disabled" : ""}>${state.driveImporting ? "正在等待 Google 雲端硬碟…" : "從 Google 雲端硬碟選取 PDF"}</button><small>${esc(note)}</small>${status.enabled && !allowed ? '<button class="text-link" data-action="settings">資料使用設定 →</button>' : ""}</div>`;
+}
 function portfolioUploadHtml(parseAvailable, consentCopy, unavailableCopy) {
   const pending = state.portfolioFiles.filter((item) => item.file && item.status !== "done");
   const sizes = (size) => size < 1048576 ? Math.max(1, Math.round(size / 1024)) + " KB" : (size / 1048576).toFixed(1) + " MB";
   return `<section class="upload-panel"><div class="panel-heading"><span class="eyebrow">YOUR PORTFOLIO</span><span class="secure-tag">◈ 原檔不保存</span></div><h3>匯入備審 PDF</h3>
     <label class="drop-zone" for="resume-file"><input id="resume-file" type="file" accept=".pdf,application/pdf" multiple ${state.resumeParsing || !state.libraryReady ? "disabled" : ""} /><span class="upload-icon">↑</span><strong>一次選擇或拖放多份 PDF</strong><small>最多 5 份，每份 8 MB，合計 24 MB</small><span class="button button-outline">${state.portfolioFiles.length ? "加入 PDF" : "選擇 PDF"}</span></label>
+    ${driveImportHtml()}
     <ul class="portfolio-files">${state.portfolioFiles.map((item) => `<li><div><strong>${esc(item.name)}</strong><small>${sizes(item.size)}・${esc(item.message)}</small></div><button class="claim-remove" data-action="remove-portfolio" data-id="${esc(item.id)}" aria-label="移除 ${esc(item.name)} 與其主張" ${state.resumeParsing ? "disabled" : ""}>×</button></li>`).join("")}</ul>
     <div class="upload-safety"><span>◈</span><p>${pending.length ? "新增檔案目前只在瀏覽器；同意解析後才會依序傳送。成功的原檔會釋放，失敗的檔案保留供重試。" : "每份 PDF 各自保留檔名、頁碼與摘錄供回查；也可直接手動整理主張。"}</p></div>
     ${pending.length ? `<div class="pdf-permission-status"><small>${state.resumeConsent && state.consentModel ? "沿用設定中的 PDF 與 Agent 授權。" : "PDF 尚未授權，請先到設定開啟。"}</small><button class="text-link" data-action="settings">資料使用設定 →</button></div><button class="button button-primary full-button" data-action="parse-portfolio" ${!parseAvailable || !state.resumeConsent || !state.consentModel || state.resumeParsing ? "disabled" : ""}>${state.resumeParsing ? "Gemini 正在依序整理…" : `整理 ${pending.length} 份未完成的 PDF`}</button>` : ""}
@@ -1560,6 +1607,8 @@ function maybePrewarmAgent() {
 
 function render() {
   maybePrewarmAgent();
+  // Load Google's scripts ahead of the click (popups need a live gesture), and only after consent.
+  if (state.page === "library" && driveImportAllowed()) { driveImporter ||= createDriveImporter(driveStatus()); driveImporter.prepare().catch(() => {}); }
   if (state.page === "device") maybeProbeLive();
   if (state.page === "interview") {
     app.innerHTML = interviewPage();
@@ -1639,6 +1688,7 @@ async function startInterview() {
         mode: state.config.mode,
         captionsEnabled: state.config.captions,
         seed: Number(state.seed),
+        driveDerived: driveClaimsInUse(),
         confirmedClaims: state.confirmClaims ? selectedPortfolioClaims().map((claim) => ({ text: claim.text, sourcePage: claim.sourcePage, evidenceQuote: claim.evidenceQuote, claimType: claim.claimType, confidence: claim.confidence, documentId: claim.documentId, sourceFilename: claim.sourceFilename })) : [],
         retentionMode: state.saveHistory ? "saved" : "ephemeral",
         cameraAnalysis: state.cameraAnalysisConsent,
@@ -2319,7 +2369,7 @@ app.addEventListener("click", async (event) => {
   if (a === "home") { stopMedia(); stopEventStream(); if (state.sessionId) api("/api/sessions/" + encodeURIComponent(state.sessionId), { method: "DELETE" }).catch(() => {}); state.sessionId = null; go("home"); }
   else if (a === "settings") { if (state.page === "settings") return; if (state.resumeParsing || state.sessionStarting) return notify("請等目前處理完成後再調整設定。"); state.settingsReturnPage = state.page; go("settings"); }
   else if (a === "settings-done") go(state.settingsReturnPage || "home");
-  else if (a === "reset-permissions") { preferenceFields.forEach((field) => { state[field] = false; }); persistPreferences(); await forgetSavedPortfolio(); render(); }
+  else if (a === "reset-permissions") { preferenceFields.forEach((field) => { state[field] = false; }); dropPendingDriveFiles(); persistPreferences(); await forgetSavedPortfolio(); render(); }
   else if (a === "library") { if (state.page === "library") return; state.libraryReturnPage = state.page; go("library"); }
   else if (a === "library-return") go(state.libraryReturnPage || "home");
   else if (a === "account") await openAccount();
@@ -2357,6 +2407,7 @@ app.addEventListener("click", async (event) => {
   else if (a === "remove-claim") { if (state.resumeParsing || !state.libraryReady) return; state.claims = state.claims.filter((c) => c.id !== id); void persistPortfolioLibrary(); render(); }
   else if (a === "sample") { if (state.resumeParsing) return; state.portfolioFiles = []; state.claimsOrigin = "sample"; state.resumeParseMessage = ""; state.resumeParseError = false; state.claims = [{ id: "c" + Date.now(), text: "我在校園借閱系統專題中負責資料處理與搜尋功能。" }, { id: "c" + (Date.now() + 1), text: "我透過自學演算法，嘗試用動態規劃改善問題解法。" }]; render(); notify("已載入可自行修改的示範主張。"); }
   else if (a === "parse-portfolio") await parsePortfolioPdf();
+  else if (a === "drive-import") await importFromDrive();
   else if (a === "remove-portfolio") removePortfolioFile(id);
   else if (a === "camera-device") checkCamera();
   else if (a === "devices") await checkDevices();
@@ -2403,6 +2454,8 @@ app.addEventListener("change", async (event) => {
     if (!state.preferencesReady || !preferenceFields.includes(field)) return;
     state[field] = el.checked;
     if (!state.consentModel) { state.resumeConsent = false; state.cameraMetricsConsent = false; }
+    if (!state.resumeConsent) state.driveConsent = false;
+    if (!state.driveConsent) dropPendingDriveFiles();
     if (!state.consentModel || !state.consentAudio) state.liveVoiceConsent = false;
     if (!state.cameraAnalysisConsent) state.cameraMetricsConsent = false;
     if (!state.auth?.authenticated) state.saveHistory = false;
