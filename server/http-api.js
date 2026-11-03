@@ -6,6 +6,7 @@ import { appendSetCookie } from "./auth-service.js";
 import { createHash } from "node:crypto";
 import { acceptWebSocket, rejectUpgrade } from "./websocket.js";
 import { driveImportStatus, driveProcessingBlock } from "./drive-import.js";
+import { createGoogleTokenVerifier, googleSignInStatus } from "./google-signin.js";
 
 export function portfolioBatchScope(batchId, authContext) {
   const owner = authContext?.userId || authContext?.guestOwnerHash;
@@ -57,8 +58,9 @@ function sendEvent(response, event) {
   response.write("data: " + JSON.stringify(event) + "\n\n");
 }
 
-export function createHttpHandler({ root, config, orchestrator, agentService, store, getProfiles, reportRepository, authService, emailDelivery, interviewHistoryRepository }) {
+export function createHttpHandler({ root, config, orchestrator, agentService, store, getProfiles, reportRepository, authService, emailDelivery, interviewHistoryRepository, verifyGoogleToken }) {
   const rootPath = resolve(root);
+  verifyGoogleToken ||= config.googleSignInClientId ? createGoogleTokenVerifier({ clientId: config.googleSignInClientId }) : null;
   const portfolioParsingAvailable = () => config.agentMode === "cli" || (config.agentMode === "gemini-api" && Boolean(config.geminiApiKey));
   return async function handler(request, response) {
     try {
@@ -88,6 +90,15 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
           authService.rateLimit("login-ip", request.socket.remoteAddress, 40, 15 * 60 * 1000);
           const input = await readJson(request, 8192);
           const result = await authService.login(input);
+          appendSetCookie(response, result.cookie);
+          appendSetCookie(response, authService.clearGuestCookie());
+          return json(response, 200, { authenticated: true, csrfToken: result.csrfToken });
+        }
+        if (method === "POST" && pathname === "/api/auth/google") {
+          if (!verifyGoogleToken) return json(response, 404, { error: { code: "GOOGLE_SIGNIN_DISABLED", message: "伺服器尚未啟用 Google 登入。" } });
+          authService.rateLimit("google-login-ip", request.socket.remoteAddress, 40, 15 * 60 * 1000);
+          const input = await readJson(request, 8192);
+          const result = authService.loginWithGoogle(await verifyGoogleToken(input.credential));
           appendSetCookie(response, result.cookie);
           appendSetCookie(response, authService.clearGuestCookie());
           return json(response, 200, { authenticated: true, csrfToken: result.csrfToken });
@@ -209,6 +220,7 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
             geminiApiConfigured: Boolean(config.geminiApiKey),
             portfolioParsingAvailable: portfolioParsingAvailable(),
             driveImport: driveImportStatus(config),
+            googleSignIn: googleSignInStatus(config),
             speech: orchestratorSpeech(orchestrator),
             liveVoice: orchestrator.liveVoice?.status() || { enabled: false, model: null, mode: "off" },
             profiles: profileList.length,

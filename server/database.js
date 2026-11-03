@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 
-const schemaVersion = 3;
+const schemaVersion = 4;
 
 export class AppDatabase {
   constructor(filePath) {
@@ -355,6 +355,20 @@ export class AppDatabase {
             PRIMARY KEY(user_id, code_hash)
           ) STRICT;
           CREATE INDEX user_mfa_recovery_active_idx ON user_mfa_recovery_codes(user_id, used_at);
+        `);
+      }
+      if (currentVersion < 4) {
+        // Sign in with Google: only a keyed hash of Google's `sub` is stored.
+        this.connection.exec(`
+          CREATE TABLE federated_identities (
+            provider TEXT NOT NULL CHECK (provider IN ('google')),
+            subject_hmac TEXT NOT NULL,
+            user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            last_authenticated_at TEXT,
+            PRIMARY KEY(provider, subject_hmac)
+          ) STRICT;
+          CREATE INDEX federated_identities_user_idx ON federated_identities(user_id);
         `);
       }
       this.connection.exec("PRAGMA user_version = " + schemaVersion);

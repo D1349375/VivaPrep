@@ -358,3 +358,12 @@
 - **其他取捨：**Picker key 會送到瀏覽器，與 Gemini key 相同時直接停用，避免把 Gemini key 外露。Google 腳本只在使用者同意後才載入，並在按鈕按下前預載，因為彈出視窗要在使用者手勢內開啟。每次匯入都走帳號選擇（`select_account`），避免選錯 Drive。檔名、類型與大小以 Drive `files.get` 為準，不用 Picker 回傳值，因為官方頁面沒有列出後者的欄位。撤回 Drive 同意時，尚未送出的 Drive 檔案會從記憶體移除。
 - **驗收：**新增 `check-drive-import`（啟用條件矩陣、免費層與 CLI 在模型呼叫前被拒、Drive 專用同意、只用 `drive.file`、權杖只送 Drive API、取消／彈窗被擋／超過大小／非 PDF／無下載權限、未設定時本機上傳與解析正常）。瀏覽器實測：未設定時按鈕停用並顯示原因，本機上傳可用；用假設定值啟用時，同意前不載入任何 Google 腳本，同意後載入真正的 GIS 與 Picker。
 - **界線：**真實的 Google 登入、Picker 選檔與下載尚未走過，要等使用者建好 OAuth 用戶端並確認付費層。OAuth 仍是「測試中」，授權 7 天失效，只有名單內帳號能用。
+
+## 2026-11-03：登入／註冊加上「使用 Google 帳號登入」
+
+- **原因：**使用者要求；Gemini 組看 Google 生態系整合，Drive 匯入已建好同一個 OAuth 用戶端。
+- **設計：**Google Identity Services 官方按鈕取得 ID token，後端用 Google JWKS（依 `cache-control` 快取，遇到未知 `kid` 重抓一次）以 RS256 驗章，再檢查 `iss`、`aud`、`exp`／`iat`（容許 60 秒誤差）、`email_verified`。只存 `sub` 的 keyed hash 與加密信箱，不使用 Google 名稱與照片，新帳號顯示名稱固定為「VivaPrep 學員」，因為顯示名稱會出現在面試畫面。資料庫 schema 升到 4，新增 `federated_identities`。
+- **帳號對應：**同信箱的已啟用帳號直接連結；同信箱但未驗證的註冊，刪除其密碼與未用的驗證連結後才連結，避免攻擊者先用他人信箱註冊、等對方用 Google 登入後沿用自己設的密碼（account pre-hijacking）。刪除流程中的帳號拒絕且不留下連結。`resetPassword` 改為 upsert，讓 Google 建立的帳號能透過重設新增密碼；`changePassword` 在沒有密碼時給明確提示。
+- **驗收：**新增 `check-google-signin`（離線自產 RSA 金鑰；驗章、錯誤 aud／iss、過期、未來簽發、他人金鑰、`alg: none`、竄改內容、未驗證信箱、金鑰輪替、帳號對應四種情況、HTTP 路由的 404／CSRF／401／Cookie）。其餘 14 支離線檢查通過。內建預覽確認登入、註冊分頁分別顯示「使用 Google 帳戶登入」「使用 Google 帳戶註冊」，console 沒有 GIS 錯誤。
+- **界線：**真實 Google 帳號登入尚未走過（需使用者本人登入）。OAuth 仍是「測試中」，只有測試使用者能用。帳號頁會顯示登入信箱，錄 Demo 時要避開。
+

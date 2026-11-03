@@ -117,6 +117,18 @@ VIVAPREP_GEMINI_PAID_TIER=confirmed
 
 檢查入口：`node scripts/check-drive-import.mjs`（離線，用假的 Google 服務，涵蓋啟用條件、後端拒絕、同意、範圍、權杖、錯誤處理與本機上傳不受影響）。
 
+## 使用 Google 帳號登入（2026-11-03）
+
+帳號頁的登入與註冊分頁，在密碼與送出按鈕下方（以「或」隔開）有 Google 官方的「使用 Google 帳戶登入／註冊」按鈕（Google Identity Services，品牌規範要求用官方按鈕）。瀏覽器取得 ID token 後送 `POST /api/auth/google`，後端以 Google 公開金鑰自行驗章，並檢查 `iss`、`aud`、`exp`、`iat` 與 `email_verified`；不需要 client secret，也不取得任何 Google API 權限。
+
+- **保存什麼：**只存 Google `sub` 的 keyed hash（`federated_identities`）和已驗證的電子郵件（加密）。Google 名稱與照片不使用，新帳號的顯示名稱是「VivaPrep 學員」，避免面試畫面出現真名。
+- **帳號對應：**同一個 `sub` 直接登入；同信箱的已啟用帳號會連結並保留原密碼；同信箱但尚未驗證的註冊，視為未證明擁有權，刪除該密碼後再連結（防帳號預先劫持）；刪除流程中的帳號一律拒絕。
+- **密碼：**Google 建立的帳號沒有密碼，「變更密碼」會提示改用「忘記密碼」設定；重設時會新增密碼。
+- **設定：**`VIVAPREP_GOOGLE_SIGNIN_CLIENT_ID`，未設定時沿用 `VIVAPREP_DRIVE_CLIENT_ID`（同一個網頁 OAuth 用戶端，已授權的 JavaScript 來源要包含實際網址）。都沒有時按鈕不顯示，`/api/auth/google` 回 404。Google 的腳本只在登入／註冊畫面載入。
+- **限制：**OAuth 同意畫面在「測試中」時只有測試使用者能登入；正式開放前要補隱私權政策與服務條款連結並送品牌驗證。
+
+檢查入口：`node scripts/check-google-signin.mjs`（離線，用自產金鑰簽 token，涵蓋驗章、各欄位拒絕、金鑰輪替、帳號對應規則與 HTTP 路由）。
+
 ## 面試節奏與收尾（2026-09-29）
 
 練習時間可選 3／5／8 分鐘，預設 5 分鐘（逢甲資工 115 官方面試為 5 分鐘）。後端接收前端的有效練習秒數，並把剩餘時間及階段交給教授 Agent。最後 15% 時間（至少 40 秒、上限 90 秒）只留一個短問題；回答後直接致謝，剩 20 秒不再產生新題。時間到或手動結束先停止問題生成、保留最後錄音或文字，再顯示／播放收尾，之後進復盤。收尾不是新題；模型等待、辨識等待與準備語音仍不計入練習倒數，遲到問題與舊題音訊不會蓋過收尾。

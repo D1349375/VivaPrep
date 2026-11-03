@@ -42,6 +42,9 @@ export const config = {
   driveClientId: process.env.VIVAPREP_DRIVE_CLIENT_ID || "",
   drivePickerApiKey: process.env.VIVAPREP_DRIVE_PICKER_API_KEY || "",
   driveAppId: process.env.VIVAPREP_DRIVE_APP_ID || "",
+  // Sign in with Google: a web OAuth client ID (public). Defaults to the Drive client,
+  // whose JavaScript origins already list this app.
+  googleSignInClientId: process.env.VIVAPREP_GOOGLE_SIGNIN_CLIENT_ID || process.env.VIVAPREP_DRIVE_CLIENT_ID || "",
   // Professor voices: Gemini TTS whenever a key is set, even with local speech
   // recognition; VIVAPREP_TTS_MODE=local keeps Windows voices only.
   ttsMode: process.env.VIVAPREP_TTS_MODE === "local" || !process.env.GEMINI_API_KEY ? "local" : "gemini",

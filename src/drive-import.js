@@ -9,7 +9,7 @@ const MAX_PDF_BYTES = 8 * 1024 * 1024;
 
 export class DriveImportCancelled extends Error {}
 
-function loadScriptTag(url) {
+export function loadScriptTag(url) {
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
     script.src = url;

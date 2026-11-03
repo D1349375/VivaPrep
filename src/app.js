@@ -5,7 +5,7 @@ import { buildPostureFeedback } from "./posture-feedback.js";
 import { VoiceActivityDetector } from "./voice-activity.js";
 import { LiveAudioLink } from "./live-audio.js";
 import { PORTFOLIO_PARSER_VERSION, librarySnapshot, readPortfolioLibrary, writePortfolioLibrary, deletePortfolioLibrary, portfolioFileHash } from "./portfolio-library.js";
-import { DriveImportCancelled, createDriveImporter } from "./drive-import.js";
+import { DriveImportCancelled, createDriveImporter, loadScriptTag } from "./drive-import.js";
 
 const app = document.getElementById("app");
 const toast = document.getElementById("toast");
@@ -1546,6 +1546,7 @@ function authEntry() {
   return `<section class="account-auth-card"><div class="eyebrow accent">VIVAPREP ACCOUNT</div><h2>${isReset ? "重設密碼" : isRegister ? "建立帳號" : "登入 VivaPrep"}</h2><p>${isReset ? "輸入註冊信箱；若帳號存在，我們會寄出重設連結。" : isRegister ? "註冊後請先驗證電子郵件；密碼至少 12 個字元。" : "登入後可選擇保存個人練習歷史。訪客仍可直接練習和匿名分享。"}</p>
   ${!isReset ? `<div class="account-mode-tabs"><button class="${mode === "login" ? "is-active" : ""}" data-action="auth-mode" data-value="login">登入</button><button class="${isRegister ? "is-active" : ""}" data-action="auth-mode" data-value="register">註冊</button></div>` : ""}
   <form data-form="${isReset ? "password-reset-request" : "auth"}">${isRegister ? `<label>顯示名稱<input name="displayName" maxlength="60" autocomplete="name" required></label>` : ""}<label>電子郵件<input type="email" name="email" maxlength="254" autocomplete="email" value="${esc(state.authEmail)}" required></label>${isReset ? "" : `<label>密碼<input type="password" name="password" minlength="12" maxlength="128" autocomplete="${isRegister ? "new-password" : "current-password"}" required></label>`}<button class="button button-primary full-button" type="submit" ${state.authBusy ? "disabled" : ""}>${state.authBusy ? "處理中…" : isReset ? "寄送重設連結" : isRegister ? "建立帳號並寄送驗證信" : "登入"}</button></form>
+  ${!isReset && googleSignInEnabled() ? `<div class="auth-divider"><span>或</span></div><div class="google-signin-block"><div id="google-signin-button" class="google-signin-button" aria-busy="true"></div><small>只取用 Google 已驗證的電子郵件；不使用你的 Google 名稱與照片，面試畫面不會顯示。</small></div>` : ""}
   ${!isReset && !isRegister ? `<button class="text-link account-forgot" data-action="auth-mode" data-value="reset">忘記密碼？</button><button class="text-link account-forgot" data-action="resend-verification">重新寄送驗證信</button>` : `<button class="text-link account-forgot" data-action="auth-mode" data-value="login">返回登入</button>`}<p class="form-status" role="status">${esc(state.authMessage)}</p>${link}<small class="subtle-copy">不會在此瀏覽器保存密碼或登入 token；登入狀態由安全 Cookie 維護。</small></section>`;
 }
 
@@ -1613,6 +1614,7 @@ function render() {
   // Load Google's scripts ahead of the click (popups need a live gesture), and only after consent.
   if (state.page === "library" && driveImportAllowed()) { driveImporter ||= createDriveImporter(driveStatus()); driveImporter.prepare().catch(() => {}); }
   if (state.page === "device") maybeProbeLive();
+  if (state.page === "account" && !state.auth?.authenticated && state.authMode !== "reset") mountGoogleSignIn();
   if (state.page === "interview") {
     app.innerHTML = interviewPage();
     if (!state.closing) startAudioMonitor();
@@ -2262,6 +2264,42 @@ async function submitAuth(form) {
       await refreshAuth();
       await loadAccountData();
     }
+  } catch (error) { state.authMessage = error.message; }
+  finally { state.authBusy = false; if (state.page === "account") render(); }
+}
+// Sign in with Google: Google's own button (its branding rules require it) hands back an
+// ID token, which the server verifies. Google's script loads only on the login screen.
+const googleSignInEnabled = () => state.health?.googleSignIn?.enabled === true;
+let googleSignInReady = null;
+let googleSignInFailed = false;
+function mountGoogleSignIn() {
+  if (!googleSignInEnabled() || googleSignInFailed) return;
+  googleSignInReady ||= (window.google?.accounts?.id ? Promise.resolve() : loadScriptTag("https://accounts.google.com/gsi/client")).then(() => {
+    window.google.accounts.id.initialize({ client_id: state.health.googleSignIn.clientId, callback: (response) => void submitGoogleCredential(response.credential), ux_mode: "popup", auto_select: false });
+  });
+  googleSignInReady.then(() => requestAnimationFrame(() => {
+    const slot = document.getElementById("google-signin-button");
+    if (!slot || slot.childElementCount) return;
+    window.google.accounts.id.renderButton(slot, { type: "standard", theme: "outline", size: "large", shape: "pill", text: state.authMode === "register" ? "signup_with" : "signin_with", locale: "zh-TW", width: Math.min(360, Math.max(240, slot.clientWidth || 320)) });
+    slot.removeAttribute("aria-busy");
+  })).catch(() => {
+    // Not retried on every render; a reload tries again.
+    googleSignInFailed = true;
+    state.authMessage = "無法載入 Google 登入，請確認網路連線，或改用電子郵件登入。";
+    if (state.page === "account") render();
+  });
+}
+async function submitGoogleCredential(credential) {
+  if (state.authBusy) return;
+  state.authBusy = true;
+  state.authMessage = "正在以 Google 帳號登入…";
+  if (state.page === "account") render();
+  try {
+    const result = await api("/api/auth/google", { method: "POST", body: JSON.stringify({ credential }) });
+    state.csrfToken = result.csrfToken || state.csrfToken;
+    state.authMessage = "登入成功。";
+    await refreshAuth();
+    await loadAccountData();
   } catch (error) { state.authMessage = error.message; }
   finally { state.authBusy = false; if (state.page === "account") render(); }
 }

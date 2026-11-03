@@ -795,6 +795,11 @@ a { color: inherit; text-decoration: none; }
 .account-auth-card label, .account-detail-card label { display: grid; gap: 7px; color: var(--ink); font-family: var(--font-ui); font-size: var(--text-control); font-weight: 500; }
 .account-auth-card input, .account-detail-card input, .account-detail-card select, .account-detail-card textarea { box-sizing: border-box; width: 100%; min-height: 42px; padding: 10px 12px; border: 1px solid #d9d8d0; border-radius: 7px; color: var(--ink); background: #fff; font-family: var(--font-ui); font-size: var(--text-control); }
 .account-detail-card textarea { resize: vertical; }
+.google-signin-block { display: grid; justify-items: center; gap: 8px; margin-top: 14px; }
+.google-signin-button { display: flex; justify-content: center; width: min(360px, 100%); min-height: 44px; }
+.google-signin-block small { color: var(--muted); font-size: 12px; line-height: 1.6; text-align: center; }
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 18px 0 0; color: var(--muted); font-size: 13px; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: #e7e0d5; }
 .account-mode-tabs { display: flex; gap: 8px; margin: 20px 0 2px; padding: 4px; border-radius: 9px; background: #f4f1eb; }
 .account-mode-tabs button { flex: 1; padding: 10px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; cursor: pointer; }
 .account-mode-tabs button.is-active { color: var(--ink); background: white; box-shadow: 0 2px 8px #0000000d; }

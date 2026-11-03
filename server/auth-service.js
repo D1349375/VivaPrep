@@ -330,6 +330,57 @@ export class AuthService {
     return this.#createAuthSession(record.user_id);
   }
 
+  // `identity` comes from a verified Google ID token ({ subject, email }, email verified).
+  loginWithGoogle(identity) {
+    const subjectHash = keyedHash(this.applicationKey, "google-subject", identity.subject);
+    const email = normalizeEmail(identity.email);
+    const lookup = this.#emailHash(email);
+    const timestamp = nowIso();
+    const notActive = () => Object.assign(new Error("這個帳號目前無法登入（可能正在刪除流程中）。"), { code: "ACCOUNT_NOT_ACTIVE", status: 403 });
+    let userId;
+    let actionKey = "auth.login_google";
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const linked = this.db.prepare(`SELECT u.user_id,u.status FROM federated_identities f JOIN users u ON u.user_id=f.user_id
+        WHERE f.provider='google' AND f.subject_hmac=?`).get(subjectHash);
+      if (linked) {
+        if (linked.status !== "active") throw notActive();
+        userId = linked.user_id;
+        this.db.prepare("UPDATE federated_identities SET last_authenticated_at=? WHERE provider='google' AND subject_hmac=?").run(timestamp, subjectHash);
+      } else {
+        const existing = this.db.prepare(`SELECT u.user_id,u.status FROM user_contacts e JOIN users u ON u.user_id=e.user_id
+          WHERE e.contact_type='email' AND e.lookup_hmac=? AND e.retired_at IS NULL`).get(lookup);
+        if (existing && !["active", "pending_verification"].includes(existing.status)) throw notActive();
+        if (existing) {
+          userId = existing.user_id;
+          actionKey = "auth.google_linked";
+          if (existing.status === "pending_verification") {
+            // Someone registered this address but never proved they own it. Google just did,
+            // so the unproven password is dropped rather than inherited (account pre-hijacking).
+            this.db.prepare("DELETE FROM password_credentials WHERE user_id=?").run(userId);
+            this.db.prepare("UPDATE auth_action_tokens SET consumed_at=? WHERE user_id=? AND consumed_at IS NULL").run(timestamp, userId);
+            this.db.prepare("UPDATE users SET status='active',email_verified_at=?,updated_at=? WHERE user_id=?").run(timestamp, timestamp, userId);
+            this.db.prepare("UPDATE user_contacts SET verified_at=? WHERE user_id=? AND lookup_hmac=?").run(timestamp, userId, lookup);
+          }
+        } else {
+          // The Google name is not used: the display name shows on screen during practice.
+          userId = randomUUID();
+          actionKey = "auth.register_google";
+          this.db.prepare("INSERT INTO users(user_id,display_name,status,created_at,updated_at,email_verified_at) VALUES(?,?,'active',?,?,?)")
+            .run(userId, encryptText(this.applicationKey, "user-display-name", "VivaPrep 學員"), timestamp, timestamp, timestamp);
+          this.db.prepare(`INSERT INTO user_contacts(contact_id,user_id,contact_type,encrypted_value,lookup_hmac,verified_at,created_at)
+            VALUES(?,?,'email',?,?,?,?)`).run(randomUUID(), userId, encryptText(this.applicationKey, "user-contact", email), lookup, timestamp, timestamp);
+          this.db.prepare("INSERT INTO user_roles(user_id,role_key,granted_at,grant_reason) VALUES(?,'user',?,'google_sign_in')").run(userId, timestamp);
+        }
+        this.db.prepare("INSERT INTO federated_identities(provider,subject_hmac,user_id,created_at,last_authenticated_at) VALUES('google',?,?,?,?)")
+          .run(subjectHash, userId, timestamp, timestamp);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    this.#audit(userId, actionKey, userId);
+    return this.#createAuthSession(userId);
+  }
+
   async verifyEmail(rawToken) {
     const tokenHash = this.#tokenHash(String(rawToken || ""), "email_verify");
     const row = this.db.prepare(`SELECT t.token_id,t.user_id,t.expires_at,t.consumed_at,e.lookup_hmac
@@ -385,7 +436,10 @@ export class AuthService {
     const timestamp = nowIso();
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("UPDATE password_credentials SET password_hash=?,hash_version=?,changed_at=? WHERE user_id=?").run(passwordHash, "scrypt-n32768-r8-p1-v1", timestamp, row.user_id);
+      // Accounts created with Google have no password row; a reset adds one.
+      this.db.prepare(`INSERT INTO password_credentials(user_id,password_hash,hash_version,changed_at) VALUES(?,?,?,?)
+        ON CONFLICT(user_id) DO UPDATE SET password_hash=excluded.password_hash,hash_version=excluded.hash_version,changed_at=excluded.changed_at`)
+        .run(row.user_id, passwordHash, "scrypt-n32768-r8-p1-v1", timestamp);
       this.db.prepare("UPDATE auth_action_tokens SET consumed_at=? WHERE token_id=? AND consumed_at IS NULL").run(timestamp, row.token_id);
       this.db.prepare("UPDATE auth_sessions SET revoked_at=?,revoke_reason='password_reset' WHERE user_id=? AND revoked_at IS NULL").run(timestamp, row.user_id);
       this.db.exec("COMMIT");
@@ -443,7 +497,8 @@ export class AuthService {
   async changePassword(context, currentPassword, newPassword) {
     const user = this.requireUser(context);
     const credential = this.db.prepare("SELECT password_hash FROM password_credentials WHERE user_id=?").get(user.userId);
-    if (!credential || !await verifyPassword(String(currentPassword || ""), credential.password_hash).catch(() => false)) {
+    if (!credential) throw Object.assign(new Error("這個帳號用 Google 登入，尚未設定密碼；請登出後用「忘記密碼」設定。"), { code: "PASSWORD_NOT_SET", status: 400 });
+    if (!await verifyPassword(String(currentPassword || ""), credential.password_hash).catch(() => false)) {
       throw Object.assign(new Error("目前密碼不正確。"), { code: "CURRENT_PASSWORD_INVALID", status: 400 });
     }
     const password = validatePassword(newPassword);
