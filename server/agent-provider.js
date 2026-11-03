@@ -248,7 +248,10 @@ export class GeminiApiProvider {
     this.timeoutMs = timeoutMs;
   }
 
-  async generate({ prompt, schema }) {
+  // Interview turns pass effort "low": without it the model thinks for 5-9 s per
+  // question. Reviews keep the model's default and the longer timeout.
+  async generate({ prompt, schema, effort, responseTimeoutMs = 25000 }) {
+    if (effort === "low") return this.#generate({ input: prompt, schema, thinkingLevel: "low", timeoutMs: responseTimeoutMs });
     return this.#generate({ input: prompt, schema });
   }
 
@@ -262,19 +265,20 @@ export class GeminiApiProvider {
     });
   }
 
-  async #generate({ input, schema }) {
+  async #generate({ input, schema, thinkingLevel, timeoutMs = this.timeoutMs }) {
     if (!this.apiKey) throw new AgentError("GEMINI_API_KEY_REQUIRED", "尚未設定 Gemini API key。請在伺服器環境設定 GEMINI_API_KEY。", 503);
     let response;
     try {
       response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(timeoutMs),
         body: JSON.stringify({
           model: this.modelId,
           input,
           store: false,
           response_format: { type: "text", mime_type: "application/json", schema },
+          ...(thinkingLevel ? { generation_config: { thinking_level: thinkingLevel } } : {}),
         }),
       });
     } catch (error) {

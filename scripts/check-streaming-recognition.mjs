@@ -139,21 +139,28 @@ assert.equal(answerPosts().length, 0, "Soft speech and a 66 s answer keep going 
 // Chrome sometimes holds words back for seconds while the student keeps talking.
 for (let n = 0; n < 35; n++) sample(n % 3 === 2 ? 0.006 : 0.04);
 assert.equal(answerPosts().length, 0, "A 3.5 s recognizer stall during speech does not end the answer");
+// Stopping to think for two seconds used to send half an answer.
+for (let n = 0; n < 20; n++) sample(0);
+assert.equal(answerPosts().length, 0, "A 2 s thinking pause does not end the answer");
 spoken += "最後";
 first.emit([["我負責資料處理", true], [spoken.slice(7), false]]);
 for (let n = 0; n < 5; n++) sample(n % 3 === 2 ? 0.006 : 0.04);
 const lastLoudAt = now;
 first.emit([["我負責資料處理", true], [spoken.slice(7), true]]);
-for (let n = 0; n < 15; n++) sample(0);
-assert.equal(answerPosts().length, 0, "Do not send before a 1.6 s pause");
-for (let n = 0; n < 3; n++) sample(0);
+for (let n = 0; n < 29; n++) sample(0);
+assert.equal(answerPosts().length, 0, "Do not send before a 3 s pause");
+for (let n = 0; n < 2; n++) sample(0);
+assert.ok(first.stopped, "Even with nothing pending, the service is asked for words still on their way");
+assert.equal(answerPosts().length, 0, "The answer waits for those words");
+spoken += "的部分";
+first.emit([["我負責資料處理", true], [spoken.slice(7), true]]);
 await settle();
 const sent = answerPosts()[0];
 assert.ok(sent, "The pause sends the answer without another click");
 const body = JSON.parse(sent.options.body);
 assert.deepEqual([body.turnId, body.eventSeq, body.text, body.speechInput], ["t1", 1, spoken, "browser-stream"]);
 const finalLatency = sent.at - lastLoudAt;
-assert.ok(finalLatency >= 1600 && finalLatency <= 1800, `Answer leaves about 1.6 s after the voice stops (got ${finalLatency} ms)`);
+assert.ok(finalLatency >= 3000 && finalLatency <= 3200, `Answer leaves about 3 s after the voice stops (got ${finalLatency} ms)`);
 assert.equal(posts.filter((post) => post.path.endsWith("audio-answers")).length, 0, "Streaming never uploads audio to Whisper");
 assert.equal(e.state.backendTurns[0].answerText, spoken);
 assert.equal(textarea.value, "", "The live transcript clears after sending");
@@ -171,7 +178,7 @@ assert.equal(e.voiceLatencies.at(-1).speechToSendMs, finalLatency, "The logged d
   assert.equal(ended, true, "A real pause still ends it");
 }
 
-// 4. Words still pending when the 1.6 s VAD pause ends are flushed with stop().
+// 4. Words still pending when the 3 s VAD pause ends are flushed with stop().
 e.acceptInterviewEvent({ ...question, seq: 3, turnId: "t2", audioUrl: null });
 assert.equal(e.timing.phase, "preparing");
 e.timing.listen(3); e.state.waitingForAgent = false;
@@ -184,7 +191,7 @@ sample(0.03); sample(0.03); sample(0.03);
 second.emit([["因為我想", false]]);
 sample(0.03);
 const lastVoiceAt = now;
-for (let n = 0; n < 16; n++) sample(0);
+for (let n = 0; n < 30; n++) sample(0);
 assert.ok(second.stopped, "VAD pause asks the service to finalize pending words");
 assert.equal(e.timing.phase, "transcribing");
 assert.equal(e.timing.countsTowardPractice(), false, "Practice time pauses while the answer is sent");
@@ -193,7 +200,7 @@ await settle();
 const flushed = JSON.parse(answerPosts().at(-1).options.body);
 assert.deepEqual([flushed.turnId, flushed.eventSeq, flushed.text], ["t2", 3, "因為我想了解系統怎麼運作"]);
 const vadLatency = answerPosts().at(-1).at - lastVoiceAt;
-assert.ok(vadLatency <= 1800, `VAD path sends within 1.8 s of the last voice (got ${vadLatency} ms)`);
+assert.ok(vadLatency <= 3200, `VAD path sends within 3.2 s of the last voice (got ${vadLatency} ms)`);
 
 // 5. A result from an older question is never sent to the new one.
 e.acceptInterviewEvent({ ...question, seq: 5, turnId: "t3", audioUrl: null });
@@ -216,7 +223,7 @@ const flushing = recognitions.at(-1);
 for (let n = 0; n < 15; n++) sample(0.002);
 sample(0.03); sample(0.03); sample(0.03);
 flushing.emit([["正在說", false]]);
-for (let n = 0; n < 17; n++) sample(0);
+for (let n = 0; n < 31; n++) sample(0);
 assert.ok(flushing.stopped);
 e.acceptInterviewEvent({ ...question, seq: 9, turnId: "t5", audioUrl: null });
 flushing.emit([["正在說的舊回答", true]]);
@@ -241,7 +248,7 @@ assert.equal(e.state.recording, true);
 audioAnswerFailures = 1;
 for (let n = 0; n < 15; n++) sample(0.002);
 sample(0.03); sample(0.03); sample(0.03);
-for (let n = 0; n < 17; n++) sample(0);
+for (let n = 0; n < 31; n++) sample(0);
 for (let n = 0; n < 6; n++) await settle();
 assert.equal(posts.filter((post) => post.path.endsWith("audio-answers")).length, 1);
 assert.equal(recordings.length, 2, "A Whisper miss listens again once on the same question");
@@ -266,12 +273,32 @@ const recordingsBefore = recordings.length;
 for (let round = 0; round < 2; round++) {
   for (let n = 0; n < 15; n++) sample(0.002);
   sample(0.03); sample(0.03); sample(0.03);
-  for (let n = 0; n < 17; n++) sample(0);
+  for (let n = 0; n < 31; n++) sample(0);
 }
 assert.ok(silentService.aborted);
 assert.equal(recordings.length, recordingsBefore + 1, "Two spoken passages with no words switch to Whisper");
 assert.equal(answerPosts().length, postsBeforeStale, "Noise without words is never sent as an answer");
 e.discardRecording();
+
+// A voice too soft for the level meter has only the words to go on; a slow batch must not end it.
+vm.runInContext("streamingRecognitionFailure = ''", sandbox);
+e.acceptInterviewEvent({ ...question, seq: 15, turnId: "t8", audioUrl: null });
+e.timing.listen(15); e.state.waitingForAgent = false;
+e.acceptInterviewEvent({ type: "interview.audio.ready", seq: 16, eventSeq: 15, turnId: "t8", audioUrl: "/audio/15" });
+audios.at(-1).end();
+const softVoice = recognitions.at(-1);
+let softWords = "";
+for (let batch = 0; batch < 6; batch++) {
+  softWords += "小聲";
+  softVoice.emit([[softWords, false]]);
+  for (let n = 0; n < 15; n++) sample(0.004);
+}
+assert.equal(softVoice.stopped, false, "Word batches 1.5 s apart keep a soft answer open");
+for (let n = 0; n < 11; n++) sample(0.004);
+assert.ok(softVoice.stopped, "The soft answer still ends once the words stop");
+softVoice.emit([[softWords, true]]);
+await settle();
+assert.equal(JSON.parse(answerPosts().at(-1).options.body).text, softWords);
 
 // 9. Consent signature and copy name the recognition location (a new interview clears the failure).
 vm.runInContext("streamingRecognitionFailure = ''", sandbox);

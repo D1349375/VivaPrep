@@ -74,7 +74,7 @@ sample(0.025); sample(0.025); sample(0.025);
 assert.equal(e.state.voiceDetected, true, "Speech below the old threshold must still be detected");
 assert.equal(e.timing.phase, "capturing");
 assert.equal(e.timing.remainingMs(), null);
-sample(0, 2600);
+sample(0, 3100);
 await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
 const audioPost = posts.find((post) => post.path.endsWith("audio-answers"));
 assert.ok(audioPost, "Silence after speech must flush audio without another mic click");

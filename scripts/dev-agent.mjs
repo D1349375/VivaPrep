@@ -1,7 +1,12 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parseEnv } from "node:util";
 
-process.env.VIVAPREP_AGENT_MODE = "cli";
+// .env chooses the provider, ahead of a VIVAPREP_AGENT_MODE in the Windows user
+// environment (loadEnvFile would not override that); no choice keeps the CLI.
+let fileEnv = {};
+try { fileEnv = parseEnv(await readFile(new URL("../.env", import.meta.url), "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; }
+process.env.VIVAPREP_AGENT_MODE = fileEnv.VIVAPREP_AGENT_MODE || "cli";
 process.env.ANTIGRAVITY_MODEL ||= "gemini-3.8-flash-medium";
 if (!process.env.VIVAPREP_SPEECH_MODE && process.platform === "win32") {
   try {

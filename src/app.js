@@ -64,7 +64,10 @@ let audioPreparationTimer = null;
 let closingTimer = null;
 let audioPlayedSequence = null;
 let candidateActivitySequence = null;
-const voiceActivity = new VoiceActivityDetector();
+// How long a turn-based answer may pause before it is sent. Longer cuts off fewer
+// answers, but every turn waits that much more; Live has its own detector.
+const ANSWER_PAUSE_MS = 3000;
+const voiceActivity = new VoiceActivityDetector({ endSilenceMs: ANSWER_PAUSE_MS });
 // Long noisy recordings made local Whisper time out; answers rarely need more.
 const MAX_ANSWER_RECORDING_MS = 60000;
 let lastAudioSampleAt = 0;
@@ -76,13 +79,13 @@ let voiceSubmissionPromise = null;
 // the student talks, so an answer is ready about a second after they stop
 // instead of after a 17-20 s local Whisper pass. Whisper stays the fallback.
 const SpeechRecognitionClass = () => window.SpeechRecognition || window.webkitSpeechRecognition || null;
-// An answer ends only when the microphone has been quiet for 1.6 s and the
-// recognizer has returned no new words for 1.2 s (words lag the audio). Either
-// signal alone cut students off: a soft voice dips under the level threshold,
-// and Chrome finalizes a phrase at every breath, then takes over a second to
-// send the next words.
-const STREAM_PAUSE_MS = 1600;
-const STREAM_WORDS_QUIET_MS = 1200;
+// An answer ends only when the microphone has been quiet for ANSWER_PAUSE_MS and
+// the recognizer has returned no new words for 2.5 s. Either signal alone cut
+// students off: a soft voice dips under the level threshold, and Chrome finalizes
+// a phrase at every breath, then takes over a second to send the next words.
+// Words lag the audio by about half a second, so a soft voice, which only has the
+// words to go on, still gets about the same pause.
+const STREAM_WORDS_QUIET_MS = 2500;
 // If the level never drops (a fan starting mid-answer), this long without new words still ends it.
 const STREAM_WORDS_ONLY_END_MS = 6000;
 // No Whisper timeout to protect here, so allow long answers, counted from the first word.
@@ -204,7 +207,7 @@ function settingsPage() {
     ? "伺服器目前未啟用即時對談；暖身對談使用回合制。"
     : `只用於「暖身對談」。面試中麥克風音訊會持續經 VivaPrep 後端即時送到 Google Gemini Live API（${esc(liveVoiceModel())}），由它聽你的回答並直接說出教授的下一句，延遲約 1～2 秒；教授指示含校系情境與你確認的備審主張，雙方逐字稿存入本場紀錄供復盤。使用 Gemini API 免費層時，Google 會用送出的內容（含語音與逐字稿）改進其產品，並可能由人工審閱，請不要說出姓名、就讀學校或其他個人資料。需同時允許 Agent 與語音；連不上、額度用完或中途斷線時自動改用回合制。`;
   const choice = (value, title, copy, disabled = false) => `<label class="recognition-option"><input type="radio" name="recognitionMode" value="${value}" data-recognition ${state.recognitionMode === value ? "checked" : ""} ${disabled || !state.preferencesReady ? "disabled" : ""} /><span><strong>${title}</strong><small>${copy}</small></span></label>`;
-  const recognitionChoice = `<fieldset class="recognition-choice"><legend>語音辨識位置</legend>${choice("browser", "瀏覽器串流辨識（較快，音訊送 Google）", streamingRecognitionSupported() ? "停頓後約 1～2 秒送出，不用等整段上傳。" : "此瀏覽器不支援串流辨識（建議使用 Chrome），會改用後端辨識。")}${choice("server", localLabel, "說完後上傳整段錄音辨識，一句話約需 15～20 秒。")}<small>更換辨識位置後，需要重新允許語音辨識。</small></fieldset>`;
+  const recognitionChoice = `<fieldset class="recognition-choice"><legend>語音辨識位置</legend>${choice("browser", "瀏覽器串流辨識（較快，音訊送 Google）", streamingRecognitionSupported() ? "停頓約 3 秒後送出，也可以按「說完了，送出」，不用等整段上傳。" : "此瀏覽器不支援串流辨識（建議使用 Chrome），會改用後端辨識。")}${choice("server", localLabel, "說完後上傳整段錄音辨識，一句話約需 15～20 秒。")}<small>更換辨識位置後，需要重新允許語音辨識。</small></fieldset>`;
   const row = (field, title, copy, disabled = false) => `<label class="toggle-row"><span><strong>${title}</strong><small>${copy}</small></span><input type="checkbox" data-preference="${field}" ${state[field] ? "checked" : ""} ${disabled || !state.preferencesReady ? "disabled" : ""} /><i></i></label>`;
   return `<div class="step-intro"><div class="eyebrow accent">PREFERENCES</div><h1>資料使用設定</h1><p>選擇一次，之後在這個瀏覽器沿用。訪客與不同帳號各自記住偏好；不會保存備審原檔或回答到瀏覽器設定中。你可以隨時關閉授權。</p></div><section class="setting-card permission-settings">
   ${row("consentModel", "允許 Agent 處理練習內容", modelCopy + " 未允許時無法開始 Gemini 面試。")}
@@ -1950,7 +1953,7 @@ function scheduleStreamEnd(capture) {
   const now = Date.now();
   const longAnswer = capture.speechStartedAt && now - capture.speechStartedAt >= MAX_STREAM_ANSWER_MS;
   const wordsQuiet = now - capture.lastWordsAt;
-  const wait = Math.min(Math.max(STREAM_PAUSE_MS - (now - capture.lastVoiceAt), STREAM_WORDS_QUIET_MS - wordsQuiet), STREAM_WORDS_ONLY_END_MS - wordsQuiet);
+  const wait = Math.min(Math.max(ANSWER_PAUSE_MS - (now - capture.lastVoiceAt), STREAM_WORDS_QUIET_MS - wordsQuiet), STREAM_WORDS_ONLY_END_MS - wordsQuiet);
   if (wait > 0 && !longAnswer) { capture.timer = setTimeout(() => scheduleStreamEnd(capture), wait); return; }
   completeVoiceCapture();
 }
@@ -2004,10 +2007,9 @@ function completeStreamingCapture(capture) {
   interviewTiming.pause("transcribing");
   state.cameraPhase = "agent_transition";
   clearTimeout(capture.timer);
-  if (capture.interim) {
-    try { capture.recognition.stop(); } catch { /* finish below */ }
-    capture.timer = setTimeout(() => void finishStreamingCapture(capture), STREAM_FLUSH_MS);
-  } else void finishStreamingCapture(capture);
+  // Even with nothing pending here, the last words may still be on their way.
+  try { capture.recognition.stop(); } catch { /* finish below */ }
+  capture.timer = setTimeout(() => void finishStreamingCapture(capture), STREAM_FLUSH_MS);
   render();
   updateConversationHud();
   return voiceSubmissionPromise;
@@ -2153,7 +2155,7 @@ function updateConversationHud() {
   const progress = document.getElementById("silence-progress");
   if (progress) progress.style.width = remaining == null ? "0%" : `${(1 - remaining / interviewTiming.waitMs) * 100}%`;
   const voice = document.getElementById("voice-status-text");
-  if (voice) voice.textContent = status + (liveLink && interviewTiming.phase === "listening" ? "；直接說話，說完教授會即時接話" : state.voiceEnabled && interviewTiming.phase === "listening" && state.recording ? "；直接說話，停頓約 1.6 秒後送出" : "");
+  if (voice) voice.textContent = status + (liveLink && interviewTiming.phase === "listening" ? "；直接說話，說完教授會即時接話" : state.voiceEnabled && interviewTiming.phase === "listening" && state.recording ? "；直接說話，停頓約 3 秒或按「說完了，送出」" : "");
   const level = document.getElementById("microphone-level");
   if (level) level.style.width = `${Math.min(100, microphoneLevel * 700)}%`;
   const mic = app.querySelector('[data-action="mic"] small');

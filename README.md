@@ -39,14 +39,16 @@ PDF 主張改為跨校系的中性經驗整理；校系相關性由面試 Agent 
 
 設備頁分開檢查麥克風與選用鏡頭，顯示輸入裝置選單及本機音量表。開始語音場次時會確認有效音訊軌；找不到麥克風時提示原因並留在設備頁。面試中可切換輸入裝置，也可從文字場次在已同意處理後啟用語音。設備試測不錄製或傳送聲音；正式回答依本場語音同意由後端處理。
 
-進入決賽、準備切換到 Gemini API 時，再設定：
+決賽版的教授出題、PDF 解析與復盤走 Gemini API。在 `.env` 設定後用 `npm run dev:agent` 啟動（改回 `cli` 就走 Antigravity CLI）：
 
-```powershell
-$env:VIVAPREP_AGENT_MODE = "gemini-api"
-$env:GEMINI_API_KEY = "你的 Google AI Studio API key"
-$env:GEMINI_MODEL = "gemini-3.8-flash"
-npm run dev
+```bash
+VIVAPREP_AGENT_MODE=gemini-api
+GEMINI_API_KEY=你的 Google AI Studio API key
 ```
+
+`dev:agent` 以 `.env` 的 `VIVAPREP_AGENT_MODE` 為準，並自動選語音辨識方式。`npm run dev` 不會蓋過 Windows 使用者環境變數；若那裡設了 `VIVAPREP_AGENT_MODE=cli`，`.env` 對它沒有作用。模型預設 `gemini-3.8-flash`，可用 `GEMINI_MODEL` 指定。出題用 `thinking_level: low`、上限 25 秒；復盤與 PDF 用模型預設、上限 90 秒。
+
+出題失敗時不會改用備用題，也不會自動重試或退回 CLI：畫面顯示錯誤，回答回到作答區，學生再送一次；復盤失敗可按「重新整理復盤」。出題、TTS 與 Live 共用同一把 key，額度用完時三者同時受影響。實測數字見[設計迭代紀錄](VivaPrep_設計迭代紀錄.md)。
 
 也可設 `VIVAPREP_AGENT_MODE=gemini`。API key 只放在伺服器環境，不會送到瀏覽器；沒有設定時不會靜默改用 mock。Agent、語音、PDF、備審主張、鏡頭及歷史保存授權集中到資料使用設定。選擇儲存在這個瀏覽器，訪客與各帳號分開；每場開始顯示沿用選擇並送出同意快照。模型接入方式或語音處理服務／位置變更後重新選擇。未授權功能顯示限制；未授權語音可改用文字。
 
@@ -66,7 +68,7 @@ npm run dev
 
 若 CLI 不在 PATH，可用 `ANTIGRAVITY_CLI_PATH` 指定執行檔。CLI 模式不會靜默退回 mock；找不到 CLI、模型不可用或呼叫失敗時會顯示錯誤。使用者需在資料使用設定允許模型處理，才會建立外部模型場次。Antigravity headless 即時對話採場次隔離的 CLI conversation、精簡問題 schema、暫存工作目錄和 sandbox；結束時釋放場次。模型 slug 需以已安裝 CLI 的 `agy models` 清單確認。
 
-Windows 本機已安裝 Antigravity CLI 時，可用 `npm run dev:agent` 啟動目前免 API key 的 CLI 模式；一般 `npm run dev` 仍使用本機示範模式。Gemini API 和 CLI 都會在建立面試時要求模型處理同意。
+Windows 本機已安裝 Antigravity CLI、`.env` 未指定 `VIVAPREP_AGENT_MODE` 或設為 `cli` 時，`npm run dev:agent` 啟動免 API key 的 CLI 模式；一般 `npm run dev` 沒有任何設定時使用本機示範模式。Gemini API 和 CLI 都會在建立面試時要求模型處理同意。
 
 ## 面試節奏與收尾（2026-09-29）
 
@@ -107,7 +109,7 @@ GEMINI_LIVE_API_KEY=                    # 留空＝沿用 GEMINI_API_KEY
 
 ### 瀏覽器串流辨識（預設，2026-10-27）
 
-學生的回答預設由瀏覽器的 Web Speech API（`SpeechRecognition`／`webkitSpeechRecognition`，`zh-TW`、連續、含 interim）即時辨識：辨識文字不顯示在作答區（教授能依上下文讀懂同音錯字，學生看到錯字反而會以為教授聽不懂；只有送出失敗或退回回合制時才把已辨識的文字留作草稿），停頓後把文字經 `POST /api/sessions/:id/answers`（帶 `turnId`、`eventSeq`）送出，不再上傳錄音給後端 Whisper。結束判斷要兩個條件同時成立：麥克風音量安靜 1.6 秒，且 Chrome 1.2 秒內沒有回傳新的 interim 文字（文字會比聲音晚到）；只看其中一個會在說話途中截斷（小聲時音量低於門檻、Chrome 換氣就定稿而下一段字超過 1 秒才回來）。Chrome 重送相同的 interim、或定稿時多補幾個字，都不算還在說話。若音量一直不降（例如途中開了風扇），6 秒沒有新字也會結束。說話期間噪音基準固定為開口前的值，連續說話不會被當成背景噪音。停頓時仍有未定稿文字會先 `stop()` 讓服務定稿，最多等 0.7 秒。單次回答上限從第一個字起算 3 分鐘（錄音退回 Whisper 時仍是 60 秒）。只有雜音、沒有文字時不送出，繼續聽同一題。
+學生的回答預設由瀏覽器的 Web Speech API（`SpeechRecognition`／`webkitSpeechRecognition`，`zh-TW`、連續、含 interim）即時辨識：辨識文字不顯示在作答區（教授能依上下文讀懂同音錯字，學生看到錯字反而會以為教授聽不懂；只有送出失敗或退回回合制時才把已辨識的文字留作草稿），停頓後把文字經 `POST /api/sessions/:id/answers`（帶 `turnId`、`eventSeq`）送出，不再上傳錄音給後端 Whisper。結束判斷要兩個條件同時成立：麥克風音量安靜 3 秒（`src/app.js` 的 `ANSWER_PAUSE_MS`），且 Chrome 2.5 秒內沒有回傳新的 interim 文字（文字會比聲音晚到）；只看其中一個會在說話途中截斷（小聲時音量低於門檻、Chrome 換氣就定稿而下一段字超過 1 秒才回來）。想立刻送出可按「說完了，送出」。Chrome 重送相同的 interim、或定稿時多補幾個字，都不算還在說話。若音量一直不降（例如途中開了風扇），6 秒沒有新字也會結束。說話期間噪音基準固定為開口前的值，連續說話不會被當成背景噪音。送出前一律先 `stop()` 讓服務回傳還在路上的字，最多等 0.7 秒。單次回答上限從第一個字起算 3 分鐘（錄音退回 Whisper 時仍是 60 秒）。只有雜音、沒有文字時不送出，繼續聽同一題。
 
 辨識準確度：Web Speech API 沒有可用的自訂詞彙，中英混雜的術語常被寫成同音中文（例如 DP → 「一滴」、Python → 「拍放」）。語音回答在後端標記 `answerFromSpeech`，教授 Agent 與復盤 Agent 的指示會說明這是辨識文字，要依上下文推回原意，不追問、不糾正錯字，也不把辨識錯字評為表達問題；逐字稿本身保留原文。
 
@@ -140,7 +142,7 @@ npm run dev:agent
 
 三位教授各有自己的聲線（`server/speech-adapter.js` 的 `voiceProfiles`）：林教授與周教授為男聲、陳教授為女聲。Gemini TTS 預設林教授 Charon、陳教授 Sulafat、周教授 Puck，並依角色帶入語氣說明；Google 文件沒有標示預建聲音的性別與口音，正式使用前請試聽。可用 `GEMINI_TTS_VOICE_TECHNICAL`、`GEMINI_TTS_VOICE_PORTFOLIO`、`GEMINI_TTS_VOICE_LOGIC` 改成其他聲音或 Extended Voice Library／Voice design 的 voice id；`node scripts/list-gemini-voices.mjs` 會列出台灣與中文候選聲音。本機模式改用 Windows OneCore zh-TW 聲音：林、周教授用 Zhiwei 男聲（語速與音高不同），陳教授用 Yating 女聲；沒有 OneCore 聲音時退回桌面 SAPI。
 
-語音面試在教授音訊實際播放結束後才啟動收音與回答等候計時。麥克風已授權時可直接開口。收音判斷會從最近 4 秒最安靜的音量估計環境噪音，開口門檻是噪音的 3 倍（至少 0.02），並分開設定開口與持續說話兩個門檻，所以風扇、冷氣等穩定噪音不會被當成說話；停頓約 1.6 秒自動送出辨識，單次回答最長收音 60 秒，也可按「說完了，送出」。畫面顯示收音音量、辨識與考官思考狀態；辨識失敗時會先自動再聽一次，同一題再失敗才需要按「重試收音」；本機 Whisper 逾時被終止後會在背景自動重新載入，可隨時改用文字或暫停麥克風。朗讀、辨識及產生下一題期間不會觸發停頓接話。若瀏覽器阻擋音訊自動播放，需按「播放問題」或選擇閱讀字幕。
+語音面試在教授音訊實際播放結束後才啟動收音與回答等候計時。麥克風已授權時可直接開口。收音判斷會從最近 4 秒最安靜的音量估計環境噪音，開口門檻是噪音的 3 倍（至少 0.02），並分開設定開口與持續說話兩個門檻，所以風扇、冷氣等穩定噪音不會被當成說話；停頓約 3 秒自動送出辨識，單次回答最長收音 60 秒，也可按「說完了，送出」。畫面顯示收音音量、辨識與考官思考狀態；辨識失敗時會先自動再聽一次，同一題再失敗才需要按「重試收音」；本機 Whisper 逾時被終止後會在背景自動重新載入，可隨時改用文字或暫停麥克風。朗讀、辨識及產生下一題期間不會觸發停頓接話。若瀏覽器阻擋音訊自動播放，需按「播放問題」或選擇閱讀字幕。
 
 說完題目後約 8 秒仍無回答，考官會明確降低難度、換個方式問；改問後再等 12 秒無回答就換到新話題。每題標記實際提問重點，面板排除近期重複重點與高度相似問句；候選題皆重複時再請 Gemini 產生新話題。這是互動策略，不把沒有收到語音的狀態當成學生能力不足。
 
