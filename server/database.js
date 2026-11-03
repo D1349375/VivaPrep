@@ -388,6 +388,8 @@ export class AppDatabase {
       ["speech-processing-v2", "speech_processing", "speech-processing-v2", "本場錄音依所選語音設定進行辨識；本機語音只在本機處理，雲端語音會傳送錄音給服務供應商。未選擇語音時仍可使用文字回答。"],
       ["speech-processing-v3", "speech_processing", "speech-processing-v3", "本場回答語音由瀏覽器串流辨識：瀏覽器會把麥克風音訊即時送至 Google 語音服務轉成文字，面試後端只收到辨識文字；串流辨識無法使用時，改將錄音送至面試後端依所選語音設定辨識。教授語音依所選設定合成。未選擇語音時仍可使用文字回答。"],
       ["speech-processing-v4", "speech_processing", "speech-processing-v4", "本場暖身對談使用 Gemini Live 即時對談：麥克風音訊會持續經面試後端即時送至 Google Gemini Live API，由它理解回答並直接產生教授語音；教授指示包含校系情境與你確認的備審主張，雙方逐字稿會寫入本場紀錄供復盤。使用 Gemini API 免費層時，Google 會使用送出的內容（含語音與逐字稿）改進其產品，並可能由人工審閱。即時對談無法使用、額度用完或中途斷線時，改用回合制（瀏覽器串流辨識或面試後端辨識，教授語音依所選設定合成）。未選擇語音時仍可使用文字回答。"],
+      // Same as v4, shown when the operator has confirmed every Gemini key is on a paid project.
+      ["speech-processing-v5", "speech_processing", "speech-processing-v5", "本場暖身對談使用 Gemini Live 即時對談：麥克風音訊會持續經面試後端即時送至 Google Gemini Live API，由它理解回答並直接產生教授語音；教授指示包含校系情境與你確認的備審主張，雙方逐字稿會寫入本場紀錄供復盤。本服務使用 Gemini API 付費層：Google 不會用送出的內容（含語音與逐字稿）改進其產品，只會在有限期間內記錄，用於偵測違規、安全與法律需求。即時對談無法使用、額度用完或中途斷線時，改用回合制（瀏覽器串流辨識或面試後端辨識，教授語音依所選設定合成）。未選擇語音時仍可使用文字回答。"],
       ["camera-metrics-processing-v1", "camera_metrics_processing", "camera-metrics-processing-v1", "只將本機從攝影機影格計算出的逐題摘要數值交給本場 Agent 復盤；不傳送或保存原始畫面、逐影格資料或臉部特徵。若另選保存個人歷史，摘要數值會加密保存至私人練習紀錄，並可隨該筆紀錄刪除。"],
     ];
     const insert = this.connection.prepare(`INSERT OR IGNORE INTO consent_policy_versions(policy_id,purpose,version,locale,notice_text,notice_sha256,effective_at)

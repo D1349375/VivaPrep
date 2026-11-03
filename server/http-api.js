@@ -218,6 +218,7 @@ export function createHttpHandler({ root, config, orchestrator, agentService, st
             model: config.modelSlug,
             liveModel: config.agentMode === "cli" ? config.liveModelSlug : config.modelSlug,
             geminiApiConfigured: Boolean(config.geminiApiKey),
+            geminiPaidTier: config.geminiPaidTierConfirmed === true,
             portfolioParsingAvailable: portfolioParsingAvailable(),
             driveImport: driveImportStatus(config),
             googleSignIn: googleSignInStatus(config),

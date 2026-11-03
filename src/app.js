@@ -213,7 +213,7 @@ function settingsPage() {
   const localLabel = state.speechStatus?.processingLocation === "local" ? "本機 Whisper（較慢，不外傳）" : "後端語音服務（較慢）";
   const liveCopy = liveVoiceModel() === "off"
     ? "伺服器目前未啟用即時對談；暖身對談使用回合制。"
-    : `只用於「暖身對談」。面試中麥克風音訊會持續經 VivaPrep 後端即時送到 Google Gemini Live API（${esc(liveVoiceModel())}），由它聽你的回答並直接說出教授的下一句，延遲約 1～2 秒；教授指示含校系情境與你確認的備審主張，雙方逐字稿存入本場紀錄供復盤。使用 Gemini API 免費層時，Google 會用送出的內容（含語音與逐字稿）改進其產品，並可能由人工審閱，請不要說出姓名、就讀學校或其他個人資料。需同時允許 Agent 與語音；連不上、額度用完或中途斷線時自動改用回合制。`;
+    : `只用於「暖身對談」。面試中麥克風音訊會持續經 VivaPrep 後端即時送到 Google Gemini Live API（${esc(liveVoiceModel())}），由它聽你的回答並直接說出教授的下一句，延遲約 1～2 秒；教授指示含校系情境與你確認的備審主張，雙方逐字稿存入本場紀錄供復盤。${state.health?.geminiPaidTier ? "本服務使用 Gemini API 付費層：Google 不會用送出的內容（含語音與逐字稿）改進其產品，只在有限期間內記錄，用於偵測違規、安全與法律需求；仍請不要說出姓名、就讀學校或其他個人資料。" : "使用 Gemini API 免費層時，Google 會用送出的內容（含語音與逐字稿）改進其產品，並可能由人工審閱，請不要說出姓名、就讀學校或其他個人資料。"}需同時允許 Agent 與語音；連不上、額度用完或中途斷線時自動改用回合制。`;
   const choice = (value, title, copy, disabled = false) => `<label class="recognition-option"><input type="radio" name="recognitionMode" value="${value}" data-recognition ${state.recognitionMode === value ? "checked" : ""} ${disabled || !state.preferencesReady ? "disabled" : ""} /><span><strong>${title}</strong><small>${copy}</small></span></label>`;
   const recognitionChoice = `<fieldset class="recognition-choice"><legend>語音辨識位置</legend>${choice("browser", "瀏覽器串流辨識（較快，音訊送 Google）", streamingRecognitionSupported() ? "停頓約 3 秒後送出，也可以按「說完了，送出」，不用等整段上傳。" : "此瀏覽器不支援串流辨識（建議使用 Chrome），會改用後端辨識。")}${choice("server", localLabel, "說完後上傳整段錄音辨識，一句話約需 15～20 秒。")}<small>更換辨識位置後，需要重新允許語音辨識。</small></fieldset>`;
   const row = (field, title, copy, disabled = false) => `<label class="toggle-row"><span><strong>${title}</strong><small>${copy}</small></span><input type="checkbox" data-preference="${field}" ${state[field] ? "checked" : ""} ${disabled || !state.preferencesReady ? "disabled" : ""} /><i></i></label>`;
@@ -223,7 +223,7 @@ function settingsPage() {
   ${row("consentAudio", "允許語音辨識與教授語音", audioCopy + " 未允許時只能使用文字回答。")}
   ${row("liveVoiceConsent", "暖身對談使用 Gemini Live 即時對談", liveCopy, liveVoiceModel() === "off" || !state.consentAudio || !state.consentModel)}
   ${row("resumeConsent", "允許整理我選擇的備審 PDF", (state.agentMode === "cli" ? "PDF 送至面試後端，由 Google Gemini 整理成附頁碼的候選主張。" : "PDF 送至 Google Gemini API 整理。") + " 每次按整理才會傳送；需同時允許 Agent。未允許時可手動編輯主張。", !state.consentModel)}
-  ${row("driveConsent", "允許從 Google 雲端硬碟匯入我選取的 PDF", driveStatus().enabled ? "只使用 Google 的 drive.file 權限：VivaPrep 只能讀取你在 Google 選擇視窗中親自選取的 PDF，看不到雲端硬碟的其他檔案。存取權杖只留在這個分頁，匯入後就丟棄，不會送到 VivaPrep 後端。PDF 先留在此瀏覽器，按整理才送至後端擷取文字，再交給 Google Gemini API 付費層整理；原檔處理後即釋放，不保存。付費層不會用這些內容改進 Google 的產品，VivaPrep 也不會用來建立、訓練或改進通用 AI 模型；使用這些主張的面試同樣只交給付費層。Google 僅在有限期間內記錄提示與回應，用於偵測違規與法律需求。可隨時到 Google 帳戶的「第三方連結」移除授權。需同時允許 PDF 整理。" : driveStatus().message + " 本機上傳不受影響。", !driveStatus().enabled || !state.resumeConsent)}
+  ${row("driveConsent", "允許從 Google 雲端硬碟匯入我選取的 PDF", driveStatus().enabled ? "只使用 Google 的 drive.file 權限：VivaPrep 只能讀取你在 Google 選擇視窗中親自選取的 PDF，看不到雲端硬碟的其他檔案。存取權杖只留在這個分頁，匯入後就丟棄，不會送到 VivaPrep 後端。PDF 先留在此瀏覽器，按整理才經後端交給 Google Gemini API 付費層整理（Gemini 直接讀 PDF 頁面）；原檔處理後即釋放，不保存。付費層不會用這些內容改進 Google 的產品，VivaPrep 也不會用來建立、訓練或改進通用 AI 模型；使用這些主張的面試同樣只交給付費層。Google 僅在有限期間內記錄提示與回應，用於偵測違規與法律需求。可隨時到 Google 帳戶的「第三方連結」移除授權。需同時允許 PDF 整理。" : driveStatus().message + " 本機上傳不受影響。", !driveStatus().enabled || !state.resumeConsent)}
   ${row("confirmClaims", "允許面試使用目前編輯的備審主張", "開始前請回查主張、檔名、頁碼與摘錄。啟用後使用當時畫面中的主張；關閉後只練習校系與通用問題。")}
   ${row("savePortfolio", "在此瀏覽器保存備審資料庫", "只保存檔名、主張、頁碼與短摘錄，不保存原始 PDF。下次可直接選用；訪客與帳號分開保存，不會同步其他裝置。共用電腦不建議啟用。關閉後會刪除已保存的資料。")}
   ${row("cameraAnalysisConsent", "啟用本機鏡頭分析（選用）", "只在此電腦即時分析，原始畫面、逐影格資料與臉部特徵不會上傳或保存。")}
@@ -1166,7 +1166,7 @@ function devicePage() {
     ? "；若使用 PDF 抽取主張，已確認主張的檔名、頁碼與短摘錄也會一併傳送"
     : "";
   const liveDisclosure = liveEligible() && liveConsented() && state.liveProbe.status !== "failed"
-    ? "；暖身對談使用 Gemini Live：麥克風音訊經面試後端即時送 Google Gemini Live API，教授語音也由它產生（免費層的內容會被 Google 用來改進產品），連不上時改用上述回合制"
+    ? `；暖身對談使用 Gemini Live：麥克風音訊經面試後端即時送 Google Gemini Live API，教授語音也由它產生（${state.health?.geminiPaidTier ? "付費層，內容不會被 Google 用來改進產品" : "免費層的內容會被 Google 用來改進產品"}），連不上時改用上述回合制`
     : "";
   const processingCopy = `${agentDisclosure}${pdfEvidenceDisclosure}；${speechDisclosure}${liveDisclosure}。原始鏡頭畫面不會上傳。`;
   return intro(3, "先確認設備，再進入面試室", `回答會送到面試後端加密暫存；${state.saveHistory ? "本場已選擇保存到登入帳號，預計保留 24 個月，可在帳號頁匯出或刪除。" : "本場預設不保存為個人歷史，結束後依暫存期限清除。"}${processingCopy}`) +

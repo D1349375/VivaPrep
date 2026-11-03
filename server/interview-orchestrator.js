@@ -16,7 +16,8 @@ const finalSafeQuestion = { candidateQuestion: "時間差不多了，最後請�
 
 // Browser streaming sends answer audio to Google from the student's browser; the consent receipt says so.
 const speechRecognitionLocation = (input) => input?.speechRecognition === "browser" ? "browser-google" : "server";
-const speechConsentVersion = (input, live = false) => live ? "speech-processing-v4" : speechRecognitionLocation(input) === "browser-google" ? "speech-processing-v3" : "speech-processing-v2";
+// Live notices differ by Gemini tier (free-tier content may be used to improve Google products).
+const speechConsentVersion = (input, live = false, paidTier = false) => live ? (paidTier ? "speech-processing-v5" : "speech-processing-v4") : speechRecognitionLocation(input) === "browser-google" ? "speech-processing-v3" : "speech-processing-v2";
 
 function safeQuestion(roleId, finalQuestion = false) {
   return { ...(finalQuestion ? finalSafeQuestion : safeSwitchQuestions[roleId] || safeSwitchQuestions.portfolio), dialogueAction: "switch_topic", sourceRefs: [] };
@@ -301,7 +302,7 @@ export class InterviewOrchestrator {
     if (this.interviewHistoryRepository) {
       try {
         if (input.consent?.modelProcessing === true) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "external_model", granted: true, version: "model-processing-v1" });
-        if (input.consent?.audioProcessing === true) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "speech_processing", granted: true, version: speechConsentVersion(input.consent, live) });
+        if (input.consent?.audioProcessing === true) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "speech_processing", granted: true, version: speechConsentVersion(input.consent, live, this.config.geminiPaidTierConfirmed === true) });
         if (requestedSave) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "save_history", granted: true, version: "save-history-v1" });
         if (input.consent?.cameraMetricsProcessing === true) this.interviewHistoryRepository.recordConsent({ sessionId: session.id, userId: session.ownerUserId, purpose: "camera_metrics_processing", granted: true, version: "camera-metrics-processing-v1" });
       } catch (error) {

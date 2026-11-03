@@ -121,7 +121,10 @@ const sessionEvents = (sessionId, type) => events.filter((event) => event.sessio
 {
   const database = new AppDatabase(":memory:");
   const notice = database.connection.prepare("SELECT notice_text FROM consent_policy_versions WHERE purpose = ? AND version = ?").get("speech_processing", "speech-processing-v4");
+  const paidNotice = database.connection.prepare("SELECT notice_text FROM consent_policy_versions WHERE purpose = ? AND version = ?").get("speech_processing", "speech-processing-v5");
   database.close();
+  assert.match(paidNotice?.notice_text || "", /付費層/, "speech-processing-v5 (paid tier) must be registered");
+  assert.doesNotMatch(paidNotice.notice_text, /免費層/);
   assert.ok(notice, "speech-processing-v4 must be registered, or recording the Live consent throws");
   assert.match(notice.notice_text, /Gemini Live/);
   assert.match(notice.notice_text, /免費層/);
@@ -142,7 +145,7 @@ fake.onClient = (conn, message) => { if (message.clientContent?.turnComplete && 
   assert.equal(event, null, "Live speaks its own opening; no Agent question or TTS is made first");
   assert.ok(live.ticket, "Session creation hands the browser a single-use socket ticket");
   assert.equal(session.consentSnapshot.liveVoice, true);
-  assert.equal(consents.find((item) => item.sessionId === sessionId && item.purpose === "speech_processing").version, "speech-processing-v4");
+  assert.equal(consents.find((item) => item.sessionId === sessionId && item.purpose === "speech_processing").version, config.geminiPaidTierConfirmed ? "speech-processing-v5" : "speech-processing-v4", "Live consent follows the confirmed Gemini tier");
   assert.equal(agentCalls.length, 0);
 
   // The socket needs the same origin and the ticket, which works once.
