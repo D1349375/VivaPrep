@@ -19,6 +19,7 @@ export function librarySnapshot(files, claims, origin) {
     id: file.id, name: String(file.name).slice(0, 120), size: file.size, lastModified: file.lastModified,
     hash: file.hash, parserVersion: file.parserVersion, selected: file.selected !== false,
     status: "done", message: file.message, analyzedAt: file.analyzedAt,
+    ...(file.source === "drive" ? { source: "drive" } : {}),
   }));
   const ids = new Set(documents.map((file) => file.id));
   const savedClaims = origin === "sample" ? [] : claims.filter((claim) => !claim.documentId || ids.has(claim.documentId)).slice(0, 80).map((claim) => ({

@@ -36,6 +36,12 @@ export const config = {
       ? "windows-sapi"
       : "off",
   geminiApiKey: process.env.GEMINI_API_KEY || "",
+  // "confirmed" only after AI Studio shows every Gemini key here on a paid project; Drive import depends on it.
+  geminiPaidTierConfirmed: process.env.VIVAPREP_GEMINI_PAID_TIER === "confirmed",
+  // Google Drive import (Picker): public browser values from one Cloud project; off when any is missing.
+  driveClientId: process.env.VIVAPREP_DRIVE_CLIENT_ID || "",
+  drivePickerApiKey: process.env.VIVAPREP_DRIVE_PICKER_API_KEY || "",
+  driveAppId: process.env.VIVAPREP_DRIVE_APP_ID || "",
   // Professor voices: Gemini TTS whenever a key is set, even with local speech
   // recognition; VIVAPREP_TTS_MODE=local keeps Windows voices only.
   ttsMode: process.env.VIVAPREP_TTS_MODE === "local" || !process.env.GEMINI_API_KEY ? "local" : "gemini",

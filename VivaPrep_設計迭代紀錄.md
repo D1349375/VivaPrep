@@ -349,3 +349,12 @@
 - **花費（token × 官方價格估算，不是帳單）：**回合制整場約 0.076 美元（出題 0.015、復盤 0.041、TTS 89.6 秒 0.020）；3 分鐘 Live 暖身連復盤約 0.023 美元。整次切換測試約 0.25 美元。復盤是最大一項，詢答 Q18 目前沒有算進去。
 - **驗收：**14 支離線檢查通過（`check-live-*`、`check-interview-performance`、`check-opening-variety`、`check-local-stt` 需要執行中服務或與 4180 衝突，未跑；前三者中 `check-live-interview`、`check-live-closing` 斷言 `cli`，API 模式會直接失敗，其餘兩支會產生實際費用）。`dev-agent.mjs` 改動後另以瀏覽器確認 `/api/health` 回 `gemini-api`。
 - **界線：**沒有真人語音數字，沒有在瀏覽器語音模式下跑過，沒有對照實際帳單；4180 需重啟才會切換。
+
+## 2026-11-01：備審資料庫接 Google Drive 匯入
+
+- **原因：**Gemini 組決賽有 25% 看 Google 技術整合，Workspace 目前完全沒有實作，初賽文件也已承諾決賽前導入 Drive。
+- **設計：**OAuth（GIS token model）、Picker、`files.get` 下載全在瀏覽器。權杖只留在當次匯入的區域變數，不保存、不經後端，所以伺服器沒有 Google 使用者憑證要保管，也不呼叫 Drive API。下載後變成一般的 `File`，走原本的「留在瀏覽器 → 按整理才送出 → 核對主張」流程。範圍只用 `drive.file`，並設 `include_granted_scopes: false`。
+- **不進免費層：**沒有 API 能查 key 的層級，改由管理者到 AI Studio 確認後設 `VIVAPREP_GEMINI_PAID_TIER=confirmed`；未設定、CLI 或示範模式時整個功能停用，後端也會在呼叫模型前回 409。主張之後還會進面試，所以文件來源會記在瀏覽器資料庫，建場次時一併把關，否則日後切到 CLI 或免費層，Drive 內容就會從這裡漏出去。`GEMINI_LIVE_API_KEY` 可能是另一個專案，所以這個旗標涵蓋所有 Gemini key。
+- **其他取捨：**Picker key 會送到瀏覽器，與 Gemini key 相同時直接停用，避免把 Gemini key 外露。Google 腳本只在使用者同意後才載入，並在按鈕按下前預載，因為彈出視窗要在使用者手勢內開啟。每次匯入都走帳號選擇（`select_account`），避免選錯 Drive。檔名、類型與大小以 Drive `files.get` 為準，不用 Picker 回傳值，因為官方頁面沒有列出後者的欄位。撤回 Drive 同意時，尚未送出的 Drive 檔案會從記憶體移除。
+- **驗收：**新增 `check-drive-import`（啟用條件矩陣、免費層與 CLI 在模型呼叫前被拒、Drive 專用同意、只用 `drive.file`、權杖只送 Drive API、取消／彈窗被擋／超過大小／非 PDF／無下載權限、未設定時本機上傳與解析正常）。瀏覽器實測：未設定時按鈕停用並顯示原因，本機上傳可用；用假設定值啟用時，同意前不載入任何 Google 腳本，同意後載入真正的 GIS 與 Picker。
+- **界線：**真實的 Google 登入、Picker 選檔與下載尚未走過，要等使用者建好 OAuth 用戶端並確認付費層。OAuth 仍是「測試中」，授權 7 天失效，只有名單內帳號能用。

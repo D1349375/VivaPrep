@@ -70,6 +70,53 @@ npm run dev
 
 Windows 本機已安裝 Antigravity CLI、`.env` 未指定 `VIVAPREP_AGENT_MODE` 或設為 `cli` 時，`npm run dev:agent` 啟動免 API key 的 CLI 模式；一般 `npm run dev` 沒有任何設定時使用本機示範模式。Gemini API 和 CLI 都會在建立面試時要求模型處理同意。
 
+## Google Drive 匯入（2026-11-01）
+
+備審資料庫可以用 Google Picker 選取雲端硬碟的 PDF。選完後和本機上傳走同一條路：檔案先留在瀏覽器，按整理才送後端抽文字、交給 Gemini，學生再核對主張。OAuth、Picker 和下載都在瀏覽器完成，存取權杖只留在當次匯入的區域變數，不保存、不送後端；伺服器也不呼叫 Drive API。
+
+**只有下列條件都成立才會啟用**，否則按鈕停用並顯示原因，本機上傳不受影響：
+
+| 條件 | 為什麼 |
+|---|---|
+| `VIVAPREP_DRIVE_CLIENT_ID`、`VIVAPREP_DRIVE_PICKER_API_KEY`、`VIVAPREP_DRIVE_APP_ID` 都已設定 | Picker 需要這三個值，且必須來自同一個 Cloud 專案。App ID 是專案編號（全數字），不是專案 ID |
+| Picker API key 不等於任何 Gemini key | 這把 key 會送到瀏覽器；相同時直接停用 |
+| `VIVAPREP_AGENT_MODE=gemini-api` 且有 `GEMINI_API_KEY` | CLI（agy）與示範模式不接受 Drive 資料 |
+| `VIVAPREP_GEMINI_PAID_TIER=confirmed` | Workspace API 使用者資料政策禁止用使用者資料訓練或改進通用 AI 模型，免費層會用送出內容改進產品。沒有 API 能查 key 的層級，所以要到 AI Studio 親自確認後才設定。有設 `GEMINI_LIVE_API_KEY` 時，那把 key 也要是付費專案 |
+
+後端另外把關：`source: "drive"` 的解析請求與 `driveDerived: true` 的場次，在條件不符時回 409（`DRIVE_PROCESSING_BLOCKED`），不會呼叫模型；解析還要帶 Drive 專用同意（`DRIVE_CONSENT_REQUIRED`）。文件的來源會記在瀏覽器資料庫，所以之後條件不符時，含 Drive 主張的場次會被擋下，取消勾選該文件即可繼續。
+
+### 主控台設定（需由專案擁有者操作）
+
+專案 ID、應用程式名稱不可含校名或縮寫（競賽匿名規定）。
+
+1. **專案**：到 <https://console.cloud.google.com/projectcreate> 建立，或沿用已綁付款的專案。
+2. **啟用 API**：<https://console.cloud.google.com/apis/library/picker.googleapis.com> 與 <https://console.cloud.google.com/apis/library/drive.googleapis.com>。
+3. **OAuth 同意畫面**：到 <https://console.cloud.google.com/auth/overview> 建立，使用者類型選「外部」，保持「測試中」。在 <https://console.cloud.google.com/auth/audience> 加入測試使用者（上限 100 位）；在 <https://console.cloud.google.com/auth/scopes> 只加 `.../auth/drive.file`。
+4. **OAuth 用戶端**：到 <https://console.cloud.google.com/auth/clients> 建立「網頁應用程式」，已授權的 JavaScript 來源填 `http://localhost`、`http://localhost:4173`、`http://localhost:4183`（雲端部署後再加正式網址）。不需要重新導向 URI。
+5. **API key**：到 <https://console.cloud.google.com/apis/credentials> 新建一把，不要沿用 Gemini key。應用程式限制選「網站」，填 `http://localhost:4173/*`、`http://localhost:4183/*`、`https://docs.google.com/*`（少了 docs.google.com 會出現 API developer key is invalid）；API 限制選 Google Picker API 與 Google Drive API。
+6. **專案編號**：在 <https://console.cloud.google.com/iam-admin/settings> 查看。
+7. **寫進本機 `.env`**（已列入 .gitignore，不要 commit）：
+
+```
+VIVAPREP_AGENT_MODE=gemini-api
+VIVAPREP_DRIVE_CLIENT_ID=
+VIVAPREP_DRIVE_PICKER_API_KEY=
+VIVAPREP_DRIVE_APP_ID=
+# 到 AI Studio 確認 key 所屬專案顯示 Paid 後才加這行
+VIVAPREP_GEMINI_PAID_TIER=confirmed
+```
+
+要從 `http://localhost:<port>` 開啟頁面，`127.0.0.1` 不在授權來源內。
+
+### 使用限制
+
+- **7 天失效**：「測試中」的授權在同意 7 天後失效，之後 Google 會再問一次。決賽 2026-11-07，2026-11-01 之後同意的授權撐得到決賽，建議展示前一天再走一次。
+- **帳號**：只有測試使用者名單內的帳號能授權；Google Workspace for Education 的未滿 18 歲帳號通常會被學校擋下。展示請用成年團隊成員的個人帳號。Gemini API 的年齡限制見 [Google 服務規範調研](VivaPrep_Google服務規範調研.md)。
+- **撤銷**：使用者可到 <https://myaccount.google.com/connections> 移除授權。
+- **檔案**：只收 PDF，每份 8 MB，與本機上傳共用 5 份、24 MB 的上限；Google 文件與試算表不會出現在選擇視窗。
+
+檢查入口：`node scripts/check-drive-import.mjs`（離線，用假的 Google 服務，涵蓋啟用條件、後端拒絕、同意、範圍、權杖、錯誤處理與本機上傳不受影響）。
+
 ## 面試節奏與收尾（2026-09-29）
 
 練習時間可選 3／5／8 分鐘，預設 5 分鐘（逢甲資工 115 官方面試為 5 分鐘）。後端接收前端的有效練習秒數，並把剩餘時間及階段交給教授 Agent。最後 15% 時間（至少 40 秒、上限 90 秒）只留一個短問題；回答後直接致謝，剩 20 秒不再產生新題。時間到或手動結束先停止問題生成、保留最後錄音或文字，再顯示／播放收尾，之後進復盤。收尾不是新題；模型等待、辨識等待與準備語音仍不計入練習倒數，遲到問題與舊題音訊不會蓋過收尾。
@@ -177,7 +224,7 @@ $env:VIVAPREP_PUBLIC_URL = "https://your-domain.example"
 
 場次節奏端點：`POST /api/sessions/:id/progress` 更新有效練習秒數；`/ending` 停止出題並容許最後答案保存；`/close` 發送致謝收尾；`/finish` 開始復盤。各端點沿用場次擁有權與 CSRF 檢查。
 
-- `GET /api/health`、`GET /api/profiles`、`GET /api/profiles/:id`、`POST /api/profiles/custom`（建立本場用的一般模擬情境，不保存為官方校系資料）
+- `GET /api/health`（含 `driveImport` 啟用狀態）、`GET /api/profiles`、`GET /api/profiles/:id`、`POST /api/profiles/custom`（建立本場用的一般模擬情境，不保存為官方校系資料）
 - `GET /api/auth/session`、`POST /api/auth/register`、`POST /api/auth/login`、`POST /api/auth/logout`
 - `POST /api/auth/verify-email`、`POST /api/auth/verification/resend`、`POST /api/auth/password-reset/request`、`POST /api/auth/password-reset/confirm`
 - `GET/PATCH /api/account`、`POST /api/account/password`、`GET /api/account/export`
