@@ -245,6 +245,9 @@ a { color: inherit; text-decoration: none; }
 .claim-item textarea:focus { outline: 0; }
 .claim-source, .claim-quote { color: var(--muted); font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
 .claim-quote { color: #746b5c; }
+.claim-evidence { display: inline-block; justify-self: start; margin-top: 2px; padding: 2px 7px; border-radius: 5px; font-size: 10px; line-height: 1.5; }
+.claim-evidence.is-warning { color: #8a3b12; background: #fbe8dc; }
+.claim-evidence.is-info { color: #5d5a52; background: #f1eee7; }
 .pdf-consent { margin: 12px 0 8px; padding: 10px; border: 1px solid #e9dfcf; border-radius: 7px; background: #fbf8f1; font-size: 11px !important; }
 .pdf-consent input { flex: 0 0 18px; }
 .pdf-parse-message, .pdf-parser-unavailable { margin: 9px 0 0; color: #526d57; font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }

@@ -54,4 +54,28 @@ assert.ok(second.claims.length);
 provider.generate = async () => { throw new AgentError("AGENT_INVALID_OUTPUT", "always malformed"); };
 await assert.rejects(service.parsePortfolioPdf(pdf("I implemented a test."), {}), {code:"AGENT_INVALID_OUTPUT"});
 assert.equal(releases.length, 3, "Release model history even on failure");
+// Native PDF (Gemini API): excerpts are compared with the local text layer and flagged, not dropped.
+const nativeProvider = { mode: "gemini-api", modelId: "flash", async generateDocument() { return nativeReply; } };
+let nativeReply;
+const nativeService = new AgentService(nativeProvider);
+const textPdf = pdf("I implemented the search feature and checked the results.");
+nativeReply = { claims: [
+  { text: "matched claim", sourcePage: 1, evidenceQuote: "implemented the search feature", claimType: "contribution", confidence: "high" },
+  { text: "reworded claim", sourcePage: 1, evidenceQuote: "I led the team to build search", claimType: "contribution", confidence: "high" },
+] };
+const native = await nativeService.parsePortfolioPdf(textPdf, {});
+assert.equal(native.parsingMode, "native-pdf");
+assert.deepEqual(native.claims.map((claim) => claim.evidenceCheck), ["matched", "mismatch"], "A reworded excerpt is kept but flagged");
+const imagePdf = pdf(""); // a page with no text: what a scanned or image-only page gives the text layer
+nativeReply = { claims: [{ text: "image claim", sourcePage: 1, evidenceQuote: "text only visible in the page image", claimType: "project", confidence: "medium" }] };
+assert.equal((await nativeService.parsePortfolioPdf(imagePdf, {})).claims[0].evidenceCheck, "image-page", "A page without a text layer is marked, not rejected");
+assert.equal((await nativeService.parsePortfolioPdf(Buffer.from("%PDF-1.7 not really a pdf"), {})).claims[0].evidenceCheck, "unchecked", "An unreadable text layer is reported as unchecked");
+const { librarySnapshot } = await import("../src/portfolio-library.js");
+const saved = librarySnapshot([{ id: "d1", name: "a.pdf", status: "done" }], [{ id: "c1", documentId: "d1", text: "t", evidenceCheck: "mismatch" }, { id: "c2", documentId: "d1", text: "u", evidenceCheck: "bogus" }], "portfolio");
+assert.equal(saved.claims[0].evidenceCheck, "mismatch", "The library keeps the check result");
+assert.equal(saved.claims[1].evidenceCheck, undefined, "Unknown values are not stored");
+const appSource = await (await import("node:fs/promises")).readFile(new URL("../src/app.js", import.meta.url), "utf8");
+assert.match(appSource, /摘錄與該頁文字不符，請回原 PDF 核對/);
+assert.match(appSource, /此頁為影像，摘錄未經系統比對/);
+console.log("PASS: native PDF excerpt check (matched / mismatch / image page / unchecked), library keeps the result");
 console.log("PASS: fenced/current JSON, truncated response rejection, neutral extraction, quick model, chunk retry, document isolation and cleanup");

@@ -340,7 +340,8 @@ async function parsePortfolioPdf() {
     item.status = "done";
     item.parserVersion = result.parserVersion || PORTFOLIO_PARSER_VERSION;
     item.analyzedAt = new Date().toISOString();
-    item.message = (result.claims?.length ? `已整理 ${result.claims.length} 個主張・原檔已釋放` : "未找到可核對的主張・可手動新增") + (Number.isFinite(result.elapsedMs) ? `・${(result.elapsedMs / 1000).toFixed(1)} 秒` : "");
+    const toCheck = (result.claims || []).filter((claim) => EVIDENCE_NOTES[claim.evidenceCheck]).length;
+    item.message = (result.claims?.length ? `已整理 ${result.claims.length} 個主張・原檔已釋放` : "未找到可核對的主張・可手動新增") + (toCheck ? `・${toCheck} 則摘錄需回 PDF 核對` : "") + (Number.isFinite(result.elapsedMs) ? `・${(result.elapsedMs / 1000).toFixed(1)} 秒` : "");
     successes++;
     await persistPortfolioLibrary();
   } catch (error) {
@@ -1099,8 +1100,18 @@ function interviewMicrophoneHtml() {
   if (!state.voiceEnabled || !state.microphones.length) return "";
   return `<div class="interview-microphone"><label for="interview-microphone-device">輸入裝置</label><select id="interview-microphone-device" data-microphone ${state.deviceChecking || state.waitingForAgent || state.transcribing ? "disabled" : ""}><option value="">系統預設</option>${state.microphones.filter((item) => item.deviceId !== "default").map((item, index) => `<option value="${esc(item.deviceId)}" ${state.microphoneId === item.deviceId ? "selected" : ""}>${esc(item.label || `麥克風 ${index + 1}`)}</option>`).join("")}</select>${state.microphoneError ? `<small role="alert">${esc(state.microphoneError)}</small>` : ""}</div>`;
 }
+// Result of comparing the excerpt with the PDF's own text layer (set by the server).
+const EVIDENCE_NOTES = {
+  mismatch: ["is-warning", "摘錄與該頁文字不符，請回原 PDF 核對"],
+  "image-page": ["is-info", "此頁為影像，摘錄未經系統比對，請回原 PDF 核對"],
+  unchecked: ["is-info", "系統無法讀取 PDF 文字，摘錄未經比對"],
+};
+function evidenceNoteHtml(claim) {
+  const note = EVIDENCE_NOTES[claim.evidenceCheck];
+  return note ? `<small class="claim-evidence ${note[0]}">${note[1]}</small>` : "";
+}
 function claimsHtml(claims = state.claims) {
-  return claims.map((c, i) => `<div class="claim-item"><span class="claim-index">${String(i + 1).padStart(2, "0")}</span><div class="claim-copy"><textarea data-claim="${esc(c.id)}" rows="2" aria-label="備審主張 ${i + 1}" maxlength="500" ${state.resumeParsing ? "disabled" : ""}>${esc(c.text)}</textarea>${c.sourcePage ? `<small class="claim-source">${esc(c.sourceFilename || "PDF")}・第 ${Number(c.sourcePage)} 頁・${esc(({ high: "高", medium: "中", low: "低" })[c.confidence] || "需核對")}信心</small>` : ""}${c.evidenceQuote ? `<small class="claim-quote">原文摘錄：「${esc(c.evidenceQuote)}」</small>` : ""}</div><button class="claim-remove" data-action="remove-claim" data-id="${esc(c.id)}" aria-label="移除主張" ${state.resumeParsing ? "disabled" : ""}>×</button></div>`).join("");
+  return claims.map((c, i) => `<div class="claim-item"><span class="claim-index">${String(i + 1).padStart(2, "0")}</span><div class="claim-copy"><textarea data-claim="${esc(c.id)}" rows="2" aria-label="備審主張 ${i + 1}" maxlength="500" ${state.resumeParsing ? "disabled" : ""}>${esc(c.text)}</textarea>${c.sourcePage ? `<small class="claim-source">${esc(c.sourceFilename || "PDF")}・第 ${Number(c.sourcePage)} 頁・${esc(({ high: "高", medium: "中", low: "低" })[c.confidence] || "需核對")}信心</small>` : ""}${c.evidenceQuote ? `<small class="claim-quote">原文摘錄：「${esc(c.evidenceQuote)}」</small>` : ""}${evidenceNoteHtml(c)}</div><button class="claim-remove" data-action="remove-claim" data-id="${esc(c.id)}" aria-label="移除主張" ${state.resumeParsing ? "disabled" : ""}>×</button></div>`).join("");
 }
 function libraryStatusHtml() {
   return `<div class="permission-summary"><strong>${state.savePortfolio ? "保存在此瀏覽器" : "目前只保留在這次開啟的頁面"}</strong><p class="library-status" role="status">${esc(state.libraryReady ? state.libraryMessage : "正在載入備審資料庫…")}</p><button class="text-link" data-action="settings">${state.savePortfolio ? "管理保存設定" : "啟用下次直接選用"} →</button></div>`;

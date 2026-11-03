@@ -27,6 +27,7 @@ export function librarySnapshot(files, claims, origin) {
     documentId: claim.documentId, sourceFilename: claim.sourceFilename,
     sourcePage: claim.sourcePage, evidenceQuote: String(claim.evidenceQuote || "").slice(0, 240),
     claimType: claim.claimType, confidence: claim.confidence,
+    ...(["matched", "mismatch", "image-page", "unchecked"].includes(claim.evidenceCheck) ? { evidenceCheck: claim.evidenceCheck } : {}),
   }));
   return { version: 1, documents, claims: savedClaims, origin: origin === "sample" ? "manual" : origin, updatedAt: new Date().toISOString() };
 }
