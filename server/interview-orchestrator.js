@@ -64,7 +64,6 @@ function compactSources(sources) {
     summary: String(source.summary || source.excerpt || "").slice(0, 700),
     confidence: source.confidence,
     reportCount: source.reportCount,
-    url: source.url,
     retrievalNote: source.retrievalNote || null,
   }));
 }
