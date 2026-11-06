@@ -1,5 +1,7 @@
 # VivaPrep 3D 面試官
 
+> 2026-09-26 更新：以下為旧版建置紀錄。最新交付請看 [DELIVERY.md](DELIVERY.md)，新版重建腳本為 `build_interviewers_v2.py`，每人獨立 `.blend`。此輪是坐姿與匯出結構修正，尚未通過寫實外觀驗收。
+
 VivaPrep 使用 Blender 與 MPFB 製作三個獨立、可替換的面試官角色。每位角色各自輸出為自包含的 glTF Binary（GLB），內含骨架、材質與下列動作片段：
 
 - `Idle`：自然待機
