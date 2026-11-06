@@ -1,0 +1,67 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vivaprep-mock",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "server.mjs"
+      ],
+      "env": {
+        "VIVAPREP_AGENT_MODE": "mock",
+        "VIVAPREP_SPEECH_MODE": "off"
+      },
+      "port": 4173
+    },
+    {
+      "name": "vivaprep-voice-mock",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "server.mjs"
+      ],
+      "env": {
+        "VIVAPREP_AGENT_MODE": "mock",
+        "VIVAPREP_SPEECH_MODE": "whisper-local",
+        "PORT": "4181"
+      },
+      "port": 4181
+    },
+    {
+      "name": "vivaprep-agent",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "scripts/dev-agent.mjs"
+      ],
+      "env": {
+        "PORT": "4180"
+      },
+      "port": 4180
+    },
+    {
+      "name": "vivaprep-pose-capture",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "server.mjs"
+      ],
+      "env": {
+        "VIVAPREP_AGENT_MODE": "mock",
+        "VIVAPREP_SPEECH_MODE": "off",
+        "PORT": "4183"
+      },
+      "port": 4183
+    },
+    {
+      "name": "vivaprep-live-mock",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "server.mjs"
+      ],
+      "env": {
+        "VIVAPREP_AGENT_MODE": "mock",
+        "VIVAPREP_SPEECH_MODE": "windows-sapi",
+        "PORT": "4182"
+      },
+      "port": 4182
+    }
+  ]
+}

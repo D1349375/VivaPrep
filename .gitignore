@@ -3,3 +3,17 @@ dist/
 .DS_Store
 Thumbs.db
 /references/
+/.data/
+/tools/3d/*.log
+/tools/3d/__pycache__/
+/tools/3d/source/*.blend1
+/tools/3d/*.zip
+/送件/
+/決賽/
+
+# Local secrets
+.env
+.env.*
+
+# Office lock files
+~$*

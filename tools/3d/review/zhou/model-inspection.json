@@ -1,0 +1,58 @@
+{
+  "rig": "VivaPrep_logic_Rig",
+  "bones": 53,
+  "actions": [
+    "FollowUp",
+    "Idle",
+    "Listening",
+    "ReadingNotes",
+    "SpeakingGesture",
+    "Thinking"
+  ],
+  "meshes": [
+    {
+      "name": "logic_Body",
+      "vertices": 13793,
+      "polygons": 13578
+    },
+    {
+      "name": "logic_Shoes",
+      "vertices": 8562,
+      "polygons": 8256
+    },
+    {
+      "name": "logic_Suit",
+      "vertices": 39163,
+      "polygons": 38404
+    },
+    {
+      "name": "Zhou_FittedHead_Editable",
+      "vertices": 71965,
+      "polygons": 71870
+    },
+    {
+      "name": "Zhou_Hair_Crown",
+      "vertices": 12979,
+      "polygons": 12368
+    },
+    {
+      "name": "Zhou_Hair_IndividualFibers",
+      "vertices": 103225,
+      "polygons": 95877
+    }
+  ],
+  "packedImages": [
+    "brown_eye.png",
+    "eyebrow001.png",
+    "eyelashes01.png",
+    "logic_hair_basecolor",
+    "middleage_lightskinned_male_diffuse2.png",
+    "REFERENCE_Zhou_OriginalConcept",
+    "shoes03_diffuse.png",
+    "teeth.png",
+    "Zhou_NavyWool_PaleShirt_Texture",
+    "Zhou_ReferenceProjection"
+  ],
+  "reviewStatus": "Not approved. One-image likeness pilot, transitional clothing and animation.",
+  "headNeckWeights": "Smooth head / neck_01 blend; shared skeleton with body"
+}

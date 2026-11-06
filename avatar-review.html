@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VivaPrep｜3D 教授檢視</title>
+<script type="importmap">{"imports":{"three":"/vendor/three.module.js"}}</script>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f0eb;color:#26352f;font:15px/1.5 system-ui,sans-serif}header{padding:20px 28px;border-bottom:1px solid #d7d6cc;display:flex;align-items:center;justify-content:space-between}h1{font-size:20px;margin:0}header p{margin:3px 0;color:#657169}a{color:#3c6651}main{display:grid;grid-template-columns:260px 1fr;height:calc(100vh - 104px)}aside{padding:22px;overflow:auto}label,legend{display:block;font-weight:650;margin-bottom:8px}select,button{font:inherit;background:white;color:inherit;border:1px solid #c4cbc4;border-radius:8px;padding:10px}select{width:100%;margin-bottom:22px}fieldset{border:0;padding:0;margin:0 0 22px}.buttons{display:grid;gap:7px}.buttons button{text-align:left;cursor:pointer}.buttons button[aria-pressed=true]{background:#355d48;color:white;border-color:#355d48}.view-buttons{display:flex;gap:4px;margin-bottom:16px}.view-buttons button{flex:1;padding:8px 4px;font-size:13px}#viewport{min-width:0;position:relative}canvas{display:block;width:100%;height:100%;opacity:1!important}#status{font-size:13px;color:#66746a}input{accent-color:#355d48}@media(max-width:700px){main{grid-template-columns:190px 1fr}aside{padding:12px}header{padding:12px}header p{display:none}}
+</style></head><body>
+<header><div><h1>VivaPrep · 坐姿與動作驗收</h1><p>三人過渡版本；周教授新外觀請開啟獨立 Blender 樣板檢視</p></div><a href="/">返回面試練習</a></header>
+<main><aside>
+<label for="character">檢視角色</label><select id="character"><option value="technical">林教授 · 專題技術</option><option value="portfolio">陳教授 · 備審資料</option><option value="logic">周教授 · 邏輯追問</option><option value="all">三人同場</option></select>
+<fieldset><legend>動作</legend><div class="buttons" id="animations">
+<button data-state="idle" aria-pressed="true">Idle · 自然待機</button><button data-state="listening" aria-pressed="false">Listening · 聆聽</button><button data-state="reading_notes" aria-pressed="false">ReadingNotes · 閱讀筆記</button><button data-state="speaking" aria-pressed="false">SpeakingGesture · 說明</button><button data-state="follow_up" aria-pressed="false">FollowUp · 前傾追問</button><button data-state="considering" aria-pressed="false">Thinking · 思考</button>
+</div></fieldset>
+<label>觀察角度</label><div class="view-buttons"><button data-view="front">正面</button><button data-view="side">側面</button><button data-view="back">背面</button></div>
+<label><input type="checkbox" id="table"> 顯示桌面</label><label><input type="checkbox" id="pause"> 暫停動作</label>
+<p id="status" role="status">正在載入角色…</p>
+</aside><div id="viewport"></div></main>
+<script type="module" src="/src/avatar-review.js"></script></body></html>

@@ -1,0 +1,173 @@
+[
+  {
+    "file": "technical.glb",
+    "bytes": 16353208,
+    "bones": 53,
+    "embeddedImages": 9,
+    "meshes": 13,
+    "clips": [
+      {
+        "name": "FollowUp",
+        "seconds": 3.633,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 2.2187,
+        "maxAdjacentRotationDegrees": 3.691,
+        "fastestJoint": "hand_r"
+      },
+      {
+        "name": "Idle",
+        "seconds": 4.033,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 0.0105,
+        "maxAdjacentRotationDegrees": 0.056,
+        "fastestJoint": "spine_03"
+      },
+      {
+        "name": "Listening",
+        "seconds": 3.233,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 0.091,
+        "maxAdjacentRotationDegrees": 0.541,
+        "fastestJoint": "head"
+      },
+      {
+        "name": "ReadingNotes",
+        "seconds": 4.833,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 0.3202,
+        "maxAdjacentRotationDegrees": 1.141,
+        "fastestJoint": "hand_r"
+      },
+      {
+        "name": "SpeakingGesture",
+        "seconds": 4.033,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 2.1695,
+        "maxAdjacentRotationDegrees": 3.242,
+        "fastestJoint": "hand_r"
+      },
+      {
+        "name": "Thinking",
+        "seconds": 4.833,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 1.4194,
+        "maxAdjacentRotationDegrees": 1.888,
+        "fastestJoint": "hand_l"
+      }
+    ]
+  },
+  {
+    "file": "portfolio.glb",
+    "bytes": 16269684,
+    "bones": 53,
+    "embeddedImages": 9,
+    "meshes": 10,
+    "clips": [
+      {
+        "name": "FollowUp",
+        "seconds": 3.633,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 2.3331,
+        "maxAdjacentRotationDegrees": 3.884,
+        "fastestJoint": "hand_r"
+      },
+      {
+        "name": "Idle",
+        "seconds": 4.033,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 0.0117,
+        "maxAdjacentRotationDegrees": 0.056,
+        "fastestJoint": "lowerarm_l"
+      },
+      {
+        "name": "Listening",
+        "seconds": 3.233,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 0.091,
+        "maxAdjacentRotationDegrees": 0.542,
+        "fastestJoint": "head"
+      },
+      {
+        "name": "ReadingNotes",
+        "seconds": 4.833,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 0.36,
+        "maxAdjacentRotationDegrees": 1.259,
+        "fastestJoint": "hand_r"
+      },
+      {
+        "name": "SpeakingGesture",
+        "seconds": 4.033,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 2.2832,
+        "maxAdjacentRotationDegrees": 3.417,
+        "fastestJoint": "hand_r"
+      },
+      {
+        "name": "Thinking",
+        "seconds": 4.833,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 1.3915,
+        "maxAdjacentRotationDegrees": 1.86,
+        "fastestJoint": "hand_l"
+      }
+    ]
+  },
+  {
+    "file": "logic.glb",
+    "bytes": 11838624,
+    "bones": 53,
+    "embeddedImages": 8,
+    "meshes": 8,
+    "clips": [
+      {
+        "name": "FollowUp",
+        "seconds": 3.633,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 2.2082,
+        "maxAdjacentRotationDegrees": 3.675,
+        "fastestJoint": "hand_r"
+      },
+      {
+        "name": "Idle",
+        "seconds": 4.033,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 0.0102,
+        "maxAdjacentRotationDegrees": 0.056,
+        "fastestJoint": "hand_l"
+      },
+      {
+        "name": "Listening",
+        "seconds": 3.233,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 0.091,
+        "maxAdjacentRotationDegrees": 0.542,
+        "fastestJoint": "head"
+      },
+      {
+        "name": "ReadingNotes",
+        "seconds": 4.833,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 0.3174,
+        "maxAdjacentRotationDegrees": 1.141,
+        "fastestJoint": "hand_r"
+      },
+      {
+        "name": "SpeakingGesture",
+        "seconds": 4.033,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 2.161,
+        "maxAdjacentRotationDegrees": 3.23,
+        "fastestJoint": "hand_r"
+      },
+      {
+        "name": "Thinking",
+        "seconds": 4.833,
+        "maxLoopSeam": 0.0,
+        "maxJointMotionRadians": 1.4218,
+        "maxAdjacentRotationDegrees": 1.891,
+        "fastestJoint": "hand_l"
+      }
+    ]
+  }
+]

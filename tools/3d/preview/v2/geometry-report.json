@@ -1,0 +1,137 @@
+[
+  {
+    "id": "technical",
+    "rig": "VivaPrep_technical_Rig",
+    "bones": 53,
+    "seatedBoundsMeters": [
+      [
+        -0.3103751540184021,
+        -0.5513889193534851,
+        0.0005155801773071289
+      ],
+      [
+        0.3111601769924164,
+        0.12936873733997345,
+        1.3551949262619019
+      ]
+    ],
+    "standingHeightMeters": 1.72,
+    "seatHeightMeters": 0.46,
+    "tableHeightMeters": 0.75,
+    "pelvisAnchorMeters": [
+      0.0,
+      0.004608818795531988,
+      0.5550000071525574
+    ],
+    "handAnchorsMeters": {
+      "l": [
+        0.20000000298023224,
+        -0.2999999225139618,
+        0.7750000357627869
+      ],
+      "r": [
+        -0.20000001788139343,
+        -0.2999999523162842,
+        0.7749999761581421
+      ]
+    },
+    "clips": [
+      "Idle",
+      "Listening",
+      "ReadingNotes",
+      "SpeakingGesture",
+      "FollowUp",
+      "Thinking"
+    ]
+  },
+  {
+    "id": "portfolio",
+    "rig": "VivaPrep_portfolio_Rig",
+    "bones": 53,
+    "seatedBoundsMeters": [
+      [
+        -0.2852771282196045,
+        -0.5463581681251526,
+        0.0010257959365844727
+      ],
+      [
+        0.28431379795074463,
+        0.10708517581224442,
+        1.3565727472305298
+      ]
+    ],
+    "standingHeightMeters": 1.67,
+    "seatHeightMeters": 0.46,
+    "tableHeightMeters": 0.75,
+    "pelvisAnchorMeters": [
+      0.0,
+      -0.02606087364256382,
+      0.5550000071525574
+    ],
+    "handAnchorsMeters": {
+      "l": [
+        0.19999998807907104,
+        -0.29999998211860657,
+        0.7749999761581421
+      ],
+      "r": [
+        -0.20000001788139343,
+        -0.29999998211860657,
+        0.7749999761581421
+      ]
+    },
+    "clips": [
+      "Idle",
+      "Listening",
+      "ReadingNotes",
+      "SpeakingGesture",
+      "FollowUp",
+      "Thinking"
+    ]
+  },
+  {
+    "id": "logic",
+    "rig": "VivaPrep_logic_Rig",
+    "bones": 53,
+    "seatedBoundsMeters": [
+      [
+        -0.32545891404151917,
+        -0.5538055300712585,
+        0.0006201267242431641
+      ],
+      [
+        0.3254610300064087,
+        0.1308606117963791,
+        1.3689395189285278
+      ]
+    ],
+    "standingHeightMeters": 1.73,
+    "seatHeightMeters": 0.46,
+    "tableHeightMeters": 0.75,
+    "pelvisAnchorMeters": [
+      0.0,
+      0.004592770244926214,
+      0.5550000071525574
+    ],
+    "handAnchorsMeters": {
+      "l": [
+        0.19999991357326508,
+        -0.2999999523162842,
+        0.7750000357627869
+      ],
+      "r": [
+        -0.19999991357326508,
+        -0.2999999523162842,
+        0.7750000357627869
+      ]
+    },
+    "clips": [
+      "Idle",
+      "Listening",
+      "ReadingNotes",
+      "SpeakingGesture",
+      "FollowUp",
+      "Thinking"
+    ]
+  }
+]
