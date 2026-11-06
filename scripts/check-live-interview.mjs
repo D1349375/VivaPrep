@@ -20,7 +20,7 @@ let sessionId;
 try {
   const initial = await call("/api/sessions", { profileId: "fcu-general", panelIds: ["portfolio", "technical", "logic"], durationMinutes: 5, mode: "voice", captionsEnabled: true, seed: 20260928, confirmedClaims: [{ text: "合成測試：我在校園借閱系統專題負責搜尋功能，曾使用測試資料核對搜尋結果。" }], retentionMode: "ephemeral", consent: { modelProcessing: true, audioProcessing: true, saveHistory: false } });
   sessionId = initial.session.sessionId;
-  assert.equal(initial.agentMode, "cli");
+  assert.notEqual(initial.agentMode, "mock", "Needs a real interview Agent (gemini-api or cli)");
   assert.equal(initial.session.voiceEnabled, true);
   note("opening", { question: initial.event.utterance, action: initial.event.dialogueAction });
   const speech = new SpeechAdapter({ mode: "windows-sapi", maxAudioBytes: 8 * 1024 * 1024 });
@@ -53,6 +53,13 @@ try {
   const switched = await waitForNewQuestion(next.currentEvent.turnId);
   assert.equal(switched.currentEvent.dialogueAction, "switch_topic");
   note("explicit_topic_switch", { question: switched.currentEvent.utterance });
+  // A silence nudge only follows a question the student has heard; while its
+  // audio is still being synthesized the server deliberately skips the nudge.
+  const deadline = Date.now() + 60000;
+  while (!(await call(`/api/sessions/${sessionId}`)).currentEvent?.audioUrl) {
+    if (Date.now() > deadline) throw new Error("Question audio timed out");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
   const rephrase = await call(`/api/sessions/${sessionId}/nudge`, { turnId: switched.currentEvent.turnId, eventSeq: switched.currentEvent.seq });
   assert.equal(rephrase.event.dialogueAction, "rephrase");
   assert.equal(rephrase.event.turnId, switched.currentEvent.turnId);

@@ -238,6 +238,7 @@ fake.onClient = (conn, message) => { if (message.clientContent?.turnComplete && 
   await until(() => sessionEvents(sessionId, "interview.closing").length === 1, "Live closing");
   const closing = sessionEvents(sessionId, "interview.closing")[0];
   assert.equal(closing.live, true);
+  await until(() => client.messages.some((message) => message.type === "ended"), "ended reaches the browser");
   assert.equal(client.messages.at(-1).type === "ended" && client.messages.at(-2).type !== "turn", true, "No student turn is announced after the farewell");
   assert.equal(closing.utterance, "好，謝謝你的分享，今天就到這裡。");
   assert.equal(session.turns[4].answerText, "我想學作業系統。");
