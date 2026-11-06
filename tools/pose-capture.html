@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MediaPipe 擷取畫面</title>
+<!-- Full-window camera view for slide screenshots. Uses the app's own analyzer
+     and overlay drawing, so the points, skeleton and labels match the product.
+     Open it from the VivaPrep server, e.g. http://localhost:4173/tools/pose-capture.html -->
+<style>
+  :root { --bg: #474f57; --ink: #f6f3ec; --good: #a8c995; --warn: #e4a081; --idle: #b8aea8; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: "Noto Sans TC", "Microsoft JhengHei", sans-serif; overflow: hidden; }
+  .stage { position: fixed; inset: 0; margin: auto; background: var(--bg); }
+  .stage.ratio { aspect-ratio: 4 / 3; width: min(100vw, 133.33vh); height: auto; max-height: 100vh; }
+  .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  .badges { position: absolute; left: 2.2%; bottom: 3%; display: flex; gap: 14px; }
+  .badge { display: flex; align-items: baseline; gap: 12px; padding: 12px 22px; border-left: 4px solid var(--idle); border-radius: 8px; background: rgba(28, 30, 31, .82); font-size: clamp(16px, 2.2vw, 30px); }
+  .badge span { opacity: .75; font-size: .8em; }
+  .badge b { font-weight: 700; }
+  .badge.good { border-color: var(--good); }
+  .badge.warn { border-color: var(--warn); }
+  .panel { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 32px); padding: 14px 20px; border-radius: 10px; background: rgba(28, 30, 31, .9); font-size: 15px; line-height: 1.6; text-align: center; }
+  .panel button { margin-top: 8px; padding: 8px 20px; border: 0; border-radius: 6px; background: var(--good); color: #1f2422; font: inherit; font-weight: 700; cursor: pointer; }
+  .panel kbd { padding: 0 6px; border: 1px solid #777; border-radius: 4px; }
+  body.clean .panel { display: none; }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <video id="video" autoplay muted playsinline></video>
+  <canvas id="overlay"></canvas>
+  <div class="badges" id="badges" hidden>
+    <div class="badge" id="gaze"><span>視線</span><b>—</b></div>
+    <div class="badge" id="posture"><span>坐姿</span><b>—</b></div>
+  </div>
+</div>
+<div class="panel" id="panel">
+  <div id="status">按下開始，允許使用鏡頭。開始後約 3 秒是個人校正：請坐正、看著鏡頭。</div>
+  <button id="start" type="button">開始</button>
+  <div><kbd>H</kbd> 隱藏或顯示這個說明　<kbd>R</kbd> 切換全螢幕／4:3 畫面　<kbd>L</kbd> 隱藏或顯示標籤</div>
+</div>
+<script type="module">
+  import { createCameraAnalyzer } from "/src/camera-analysis.js";
+  import { createPoseOverlay, liveBadges } from "/src/pose-overlay.js";
+
+  const video = document.getElementById("video");
+  const overlay = createPoseOverlay(document.getElementById("overlay"), video);
+  const statusText = document.getElementById("status");
+  const badges = document.getElementById("badges");
+
+  function setBadge(id, { value, tone }) {
+    const element = document.getElementById(id);
+    element.className = "badge " + tone;
+    element.querySelector("b").textContent = value;
+  }
+
+  const analyzer = createCameraAnalyzer((summary) => {
+    const { gaze, posture } = liveBadges(summary);
+    setBadge("gaze", gaze);
+    setBadge("posture", posture);
+    if (summary?.status === "unavailable") statusText.textContent = summary.errorMessage || "鏡頭分析無法使用。";
+  }, { onOverlay: (points) => overlay.update(points) });
+
+  document.getElementById("start").addEventListener("click", async (event) => {
+    event.target.disabled = true;
+    statusText.textContent = "載入模型中（第一次要從 Google Storage 下載模型檔）…";
+    try {
+      video.srcObject = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+      await video.play();
+      analyzer.setOverlay(true);
+      overlay.start();
+      badges.hidden = false;
+      await analyzer.start({ video });
+      event.target.hidden = true;
+      statusText.textContent = "追蹤中。請坐正看著鏡頭，等左下角從「校正中」變成「看向考官」「端正」，再按 H 隱藏這個說明後截圖。";
+    } catch (error) {
+      statusText.textContent = "無法開始：" + (error?.message || error);
+      event.target.disabled = false;
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    const key = event.key.toLowerCase();
+    if (key === "h") document.body.classList.toggle("clean");
+    if (key === "r") document.getElementById("stage").classList.toggle("ratio");
+    if (key === "l") badges.hidden = !badges.hidden;
+  });
+</script>
+</body>
+</html>

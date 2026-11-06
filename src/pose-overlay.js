@@ -11,7 +11,9 @@ export const IRIS_CENTERS = [468, 473];
 // PoseLandmarker upper body: shoulders, arms, hands and hips.
 export const POSE_EDGES = [[11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [15, 17], [15, 19], [17, 19], [16, 18], [16, 20], [18, 20], [11, 23], [12, 24], [23, 24]];
 const POSE_JOINTS = [11, 12, 13, 14, 15, 16, 23, 24];
-const MIN_VISIBILITY = 0.5;
+// Drawing only, not analysis (camera-signals keeps its own threshold). A laptop camera
+// often catches just the top of the shoulders, which MediaPipe scores around 0.3-0.5.
+export const MIN_DRAW_VISIBILITY = 0.3;
 
 const ATTENTION_LABELS = { screen: "看向考官", down: "低頭", side: "看旁邊", up: "往上看" };
 
@@ -82,13 +84,16 @@ export function createPoseOverlay(canvas, video) {
     const map = coverMapping(video.videoWidth, video.videoHeight, width, height);
     const { face, pose } = shown;
     if (face) {
-      context.fillStyle = "rgba(255,255,255,.5)";
-      for (let index = 0; index < Math.min(face.length, 468); index += 3) {
+      // Every mesh point, sized to the box: on a recording the earlier 1.6 px dots at
+      // half opacity were invisible.
+      const dot = Math.max(1.6 * ratio, width / 450);
+      context.fillStyle = "rgba(255,255,255,.82)";
+      for (let index = 0; index < Math.min(face.length, 468); index++) {
         const [x, y] = map(face[index]);
-        context.fillRect(x - ratio * 0.8, y - ratio * 0.8, ratio * 1.6, ratio * 1.6);
+        context.fillRect(x - dot / 2, y - dot / 2, dot, dot);
       }
-      context.lineWidth = 1.5 * ratio;
-      context.strokeStyle = "rgba(255,255,255,.7)";
+      context.lineWidth = Math.max(2 * ratio, width / 300);
+      context.strokeStyle = "rgba(255,255,255,.85)";
       path(face, FACE_OVAL, map, true);
       context.strokeStyle = "rgba(168,201,149,.95)";
       path(face, LEFT_EYE, map, true);
@@ -100,13 +105,13 @@ export function createPoseOverlay(canvas, video) {
         if (!face[index]) return;
         const [x, y] = map(face[index]);
         context.beginPath();
-        context.arc(x, y, 2.6 * ratio, 0, Math.PI * 2);
+        context.arc(x, y, Math.max(3 * ratio, width / 160), 0, Math.PI * 2);
         context.fill();
       });
     }
     if (pose) {
-      const seen = (index) => pose[index] && (pose[index][2] ?? 1) >= MIN_VISIBILITY;
-      context.lineWidth = 3 * ratio;
+      const seen = (index) => pose[index] && (pose[index][2] ?? 1) >= MIN_DRAW_VISIBILITY;
+      context.lineWidth = Math.max(3.5 * ratio, width / 110);
       context.lineCap = "round";
       context.strokeStyle = "rgba(168,201,149,.9)";
       POSE_EDGES.forEach(([from, to]) => {
@@ -122,7 +127,7 @@ export function createPoseOverlay(canvas, video) {
       POSE_JOINTS.filter(seen).forEach((index) => {
         const [x, y] = map(pose[index]);
         context.beginPath();
-        context.arc(x, y, 3.5 * ratio, 0, Math.PI * 2);
+        context.arc(x, y, Math.max(4 * ratio, width / 90), 0, Math.PI * 2);
         context.fill();
       });
     }

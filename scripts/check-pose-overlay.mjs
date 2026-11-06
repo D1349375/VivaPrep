@@ -33,4 +33,6 @@ assert.deepEqual(smoothPoints(null, [[1, 1, 0.8]]), [[1, 1, 0.8]]);
 assert.deepEqual(smoothPoints([[0, 0, 0.2]], [[1, 2, 0.9]], 0.5), [[0.5, 1, 0.9]]);
 assert.deepEqual(smoothPoints([[0, 0]], [[1, 1], [2, 2]]), [[1, 1], [2, 2]]);
 
+const { MIN_DRAW_VISIBILITY } = await import("../src/pose-overlay.js");
+assert.ok(MIN_DRAW_VISIBILITY <= 0.3, "Shoulders a laptop camera only half sees (visibility 0.3-0.5) must still be drawn");
 console.log("PASS: overlay landmark indices, object-fit cover mapping, live gaze/posture labels, and point smoothing");

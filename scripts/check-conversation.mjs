@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { InterviewTiming } from "../src/interview-timing.js";
-import { PanelCoordinator, isRepeatedQuestion } from "../server/panel-coordinator.js";
+import { PanelCoordinator, classifyAnswer, isRepeatedQuestion } from "../server/panel-coordinator.js";
 import { InterviewOrchestrator } from "../server/interview-orchestrator.js";
 import { buildAgentPrompt } from "../server/agent-provider.js";
 
@@ -37,6 +37,17 @@ for (const phase of ["speaking","listening","capturing"]) {
 }
 
 const coordinator = new PanelCoordinator();
+const allRoles = ["portfolio", "technical", "logic"];
+for (const answer of ["我平常用 C++ 寫題目", "我用ＪＡＶＡ寫了一個小遊戲", "我參加過 APCS，觀念題拿四級", "我用 Arduino 做了溫度感測器", "我在研究 AI 怎麼辨識手寫數字"]) {
+  assert.equal(coordinator.chooseRole(allRoles, [], answer), "technical", `Technical answer goes to the technical professor: ${answer}`);
+}
+assert.equal(coordinator.chooseRole(allRoles, [], "我從小就對這個科系很有興趣，未來想當工程師"), "motivation");
+assert.equal(coordinator.chooseRole(allRoles, [], "我在專題裡負責寫程式，也要和組員分工"), "portfolio", "Contribution wording outweighs a single technical word");
+assert.equal(coordinator.chooseRole(allRoles, [], "嗯，就是這樣"), "portfolio", "No signal falls back to the portfolio professor");
+assert.equal(classifyAnswer("我會寄 email 給老師").technical, 0, "ASCII terms match whole words only");
+assert.equal(classifyAnswer("abc++").technical, 0);
+assert.equal(coordinator.chooseRole(["technical", "logic"], [], "嗯，就是這樣"), "technical", "Without the portfolio professor the roster order decides");
+assert.equal(coordinator.chooseRole(allRoles, [{ roleId: "technical" }, { roleId: "technical" }], "我用 Python 寫爬蟲"), "portfolio", "No professor asks three questions in a row");
 const old = [{ questionText: "這個專題裡，你自己負責的工作是什麼？", questionFocus: "personal_contribution", roleId: "portfolio" }];
 const repeated = { agentId: "portfolio", candidateQuestion: "你個人親自實作了哪些模組？", questionFocus: "personal_contribution", relevance: 1 };
 assert.equal(isRepeatedQuestion(repeated, old), true, "Different wording of the same focus is a repeat");
